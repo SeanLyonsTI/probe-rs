@@ -49,6 +49,7 @@ mod erase;
 mod error;
 mod flash_algorithm;
 mod flasher;
+mod host_flasher;
 mod loader;
 mod progress;
 
@@ -62,5 +63,6 @@ pub use flash_algorithm::*;
 pub use flasher::{
     ActiveFlasher, Erase, FlashData, Flasher, LoadedRegion, Operation, Program, Verify,
 };
+pub use host_flasher::HostSideFlasher;
 pub use loader::*;
 pub use progress::*;

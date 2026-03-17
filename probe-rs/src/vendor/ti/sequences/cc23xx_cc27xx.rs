@@ -13,9 +13,9 @@ use crate::architecture::arm::armv6m::{Aircr, BpCtrl, Demcr, Dhcsr};
 use crate::architecture::arm::core::cortex_m;
 use crate::architecture::arm::dp::{Abort, Ctrl, DebugPortError, DpAccess, DpAddress, SelectV1};
 use crate::architecture::arm::memory::ArmMemoryInterface;
-use crate::architecture::arm::sequences::{ArmDebugSequence, cortex_m_core_start};
+use crate::architecture::arm::sequences::{ArmDebugSequence, DebugFlashSequence, cortex_m_core_start};
 use crate::architecture::arm::{ArmError, FullyQualifiedApAddress};
-use probe_rs_target::CoreType;
+use probe_rs_target::{CoreType, FlashProperties, SectorDescription};
 
 /// Marker struct indicating initialization sequencing for cc23xx_cc27xx family parts.
 #[derive(Debug)]
@@ -107,6 +107,123 @@ impl TxCtrlRegister {
         let sec_ap: FullyQualifiedApAddress = ApSel::SecAp.into();
         interface.write_raw_ap_register(&sec_ap, Self::TX_CTRL_REGISTER_ADDRESS, self.0)
     }
+}
+
+bitfield! {
+    /// RX_CTRL Register, part of SEC-AP.
+    ///
+    /// This register is used to control the reception of SACI responses.
+    #[derive(Copy, Clone)]
+    pub struct RxCtrlRegister(u32);
+    impl Debug;
+    /// Bit indicating if the RXD register has data ready.
+    ///
+    /// Indicates that RXD can be read. Set by hardware when device writes to RXD,
+    /// cleared by hardware when RXD is read.
+    ///
+    /// `0`: RXD is empty
+    /// `1`: RXD has data ready
+    pub rxd_ready, _: 0;
+}
+
+impl RxCtrlRegister {
+    /// Address of the RX_CTRL register within the SEC-AP.
+    pub const RX_CTRL_REGISTER_ADDRESS: u64 = 0x0C;
+
+    /// Read the RX_CTRL register from the SEC-AP.
+    pub fn read(interface: &mut dyn DapAccess) -> Result<Self, ArmError> {
+        let sec_ap: FullyQualifiedApAddress = ApSel::SecAp.into();
+        let contents = interface.read_raw_ap_register(&sec_ap, Self::RX_CTRL_REGISTER_ADDRESS)?;
+        Ok(Self(contents))
+    }
+}
+
+/// SACI Command IDs for flash operations.
+///
+/// These command IDs are defined in the CC23xx/CC27xx Technical Reference Manual.
+#[allow(dead_code)]
+mod saci_cmd {
+    /// Exit SACI mode
+    pub const DEBUG_EXIT_SACI: u32 = 0x07;
+
+    /// Erase entire chip (MAIN + CCFG, SCFG, OTP for CC27xx)
+    pub const FLASH_ERASE_CHIP: u32 = 0x05;
+
+    /// Program MAIN flash sectors using pipelined protocol
+    pub const FLASH_PROG_MAIN_PIPELINED: u32 = 0x06;
+
+    /// Program CCFG sector
+    pub const FLASH_PROG_CCFG_SECTOR: u32 = 0x10;
+
+    /// Verify MAIN flash sectors using CRC32
+    pub const FLASH_VERIFY_MAIN_SECTORS: u32 = 0x11;
+
+    /// Verify CCFG sector using CRC32
+    pub const FLASH_VERIFY_CCFG_SECTOR: u32 = 0x12;
+
+    /// Program SCFG sector (CC27xx only)
+    pub const FLASH_PROG_SCFG_SECTOR: u32 = 0x1A;
+
+    /// Verify SCFG sector (CC27xx only)
+    pub const FLASH_VERIFY_SCFG_SECTOR: u32 = 0x1B;
+
+    /// No operation - used to keep SACI session alive
+    pub const MISC_NO_OPERATION: u32 = 0x00;
+}
+
+/// SACI command result codes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SaciResult {
+    /// Command completed successfully
+    Success = 0x00,
+    /// Invalid command parameter
+    InvalidParam = 0x01,
+    /// Flash FSM error
+    FlashFsmError = 0x02,
+    /// Command not allowed in current state
+    NotAllowed = 0x03,
+    /// CRC mismatch during verification
+    CrcMismatch = 0x04,
+    /// Unknown error
+    Unknown = 0xFF,
+}
+
+impl From<u8> for SaciResult {
+    fn from(value: u8) -> Self {
+        match value {
+            0x00 => SaciResult::Success,
+            0x01 => SaciResult::InvalidParam,
+            0x02 => SaciResult::FlashFsmError,
+            0x03 => SaciResult::NotAllowed,
+            0x04 => SaciResult::CrcMismatch,
+            _ => SaciResult::Unknown,
+        }
+    }
+}
+
+/// SEC-AP register addresses
+#[allow(dead_code)]
+mod sec_ap_regs {
+    /// TX_DATA register - write command/data words here
+    pub const TX_DATA: u64 = 0x00;
+    /// TX_CTRL register - control transmission
+    pub const TX_CTRL: u64 = 0x04;
+    /// RX_DATA register - read response words here
+    pub const RX_DATA: u64 = 0x08;
+    /// RX_CTRL register - check for response ready
+    pub const RX_CTRL: u64 = 0x0C;
+}
+
+/// Flash memory region type for CC23xx/CC27xx devices
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlashRegion {
+    /// Main application flash
+    Main,
+    /// Customer Configuration (CCFG) sector
+    Ccfg,
+    /// Security Configuration (SCFG) sector - CC27xx only
+    Scfg,
 }
 
 impl From<ApSel> for FullyQualifiedApAddress {
@@ -201,6 +318,30 @@ impl CC23xxCC27xx {
 
         Ok(())
     }
+}
+
+/// Calculate CRC32 using ISO-HDLC (CRC-32) polynomial.
+///
+/// Parameters from the TI documentation:
+/// - CRC32_INIT  = 0xFFFFFFFF
+/// - CRC32_POLY  = 0x04C11DB7
+/// - CRC32_RPOLY = 0xEDB88320 (reflected)
+/// - CRC32_FINAL = 0xFFFFFFFF (XOR output)
+fn crc32_iso_hdlc(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+
+    crc ^ 0xFFFF_FFFF
 }
 
 impl ArmDebugSequence for CC23xxCC27xx {
@@ -373,5 +514,274 @@ impl ArmDebugSequence for CC23xxCC27xx {
         // Step 4: Start the core like normal
         let mut core = interface.memory_interface(core_ap)?;
         cortex_m_core_start(&mut *core)
+    }
+
+    fn debug_flash_sequence(&self) -> Option<Arc<dyn DebugFlashSequence>> {
+        Some(Arc::new(CC23xxCC27xxFlashSequence::new()))
+    }
+}
+
+/// Host-side flash programming implementation for CC23xx/CC27xx devices.
+///
+/// This implements flash programming via SACI commands sent through the SEC-AP
+/// rather than loading a flash algorithm into target RAM.
+#[derive(Debug)]
+pub struct CC23xxCC27xxFlashSequence {
+    /// Flash properties for the device
+    properties: FlashProperties,
+}
+
+impl CC23xxCC27xxFlashSequence {
+    /// Create a new flash sequence for CC23xx/CC27xx devices.
+    pub fn new() -> Self {
+        Self {
+            properties: FlashProperties {
+                address_range: 0..0x0008_0000, // 512KB default, adjusted per device
+                page_size: 2048,               // 2KB page size
+                erased_byte_value: 0xFF,
+                program_page_timeout: 1000,    // 1 second
+                erase_sector_timeout: 5000,    // 5 seconds
+                sectors: vec![SectorDescription {
+                    size: 2048,
+                    address: 0,
+                }],
+            },
+        }
+    }
+
+    /// Helper to send SACI commands (delegates to static helper).
+    fn poll_tx_ctrl(
+        &self,
+        interface: &mut dyn DapAccess,
+        timeout: Duration,
+    ) -> Result<(), ArmError> {
+        let start = Instant::now();
+        let mut tx_ctrl = TxCtrlRegister::read(interface)?;
+        TxCtrlRegister::read(interface)?;
+        while tx_ctrl.txd_full() {
+            if start.elapsed() >= timeout {
+                return Err(ArmError::Timeout);
+            }
+            tx_ctrl = TxCtrlRegister::read(interface)?;
+        }
+        Ok(())
+    }
+
+    /// Helper to poll RX_CTRL until data is ready.
+    fn poll_rx_ctrl(
+        &self,
+        interface: &mut dyn DapAccess,
+        timeout: Duration,
+    ) -> Result<(), ArmError> {
+        let start = Instant::now();
+        loop {
+            let rx_ctrl = RxCtrlRegister::read(interface)?;
+            if rx_ctrl.rxd_ready() {
+                return Ok(());
+            }
+            if start.elapsed() >= timeout {
+                return Err(ArmError::Timeout);
+            }
+            thread::sleep(Duration::from_micros(100));
+        }
+    }
+
+    /// Send a simple SACI command.
+    fn saci_command(&self, interface: &mut dyn DapAccess, command: u32) -> Result<(), ArmError> {
+        let sec_ap: FullyQualifiedApAddress = ApSel::SecAp.into();
+
+        self.poll_tx_ctrl(interface, Duration::from_millis(1))?;
+
+        let mut tx_ctrl = TxCtrlRegister(0);
+        tx_ctrl.set_cmd_start(true);
+        TxCtrlRegister::write(&tx_ctrl, interface)?;
+
+        interface.write_raw_ap_register(&sec_ap, sec_ap_regs::TX_DATA, command)?;
+
+        self.poll_tx_ctrl(interface, Duration::from_millis(1))?;
+
+        Ok(())
+    }
+
+    /// Send a multi-word SACI command.
+    fn saci_command_multi(
+        &self,
+        interface: &mut dyn DapAccess,
+        words: &[u32],
+        timeout: Duration,
+    ) -> Result<(), ArmError> {
+        let sec_ap: FullyQualifiedApAddress = ApSel::SecAp.into();
+
+        if words.is_empty() {
+            return Ok(());
+        }
+
+        self.poll_tx_ctrl(interface, timeout)?;
+
+        let mut tx_ctrl = TxCtrlRegister(0);
+        tx_ctrl.set_cmd_start(true);
+        TxCtrlRegister::write(&tx_ctrl, interface)?;
+
+        interface.write_raw_ap_register(&sec_ap, sec_ap_regs::TX_DATA, words[0])?;
+
+        for word in &words[1..] {
+            self.poll_tx_ctrl(interface, timeout)?;
+            interface.write_raw_ap_register(&sec_ap, sec_ap_regs::TX_DATA, *word)?;
+        }
+
+        self.poll_tx_ctrl(interface, timeout)?;
+
+        Ok(())
+    }
+
+    /// Read a response word from the device.
+    fn saci_read_response(
+        &self,
+        interface: &mut dyn DapAccess,
+        timeout: Duration,
+    ) -> Result<u32, ArmError> {
+        let sec_ap: FullyQualifiedApAddress = ApSel::SecAp.into();
+
+        self.poll_rx_ctrl(interface, timeout)?;
+        let response = interface.read_raw_ap_register(&sec_ap, sec_ap_regs::RX_DATA)?;
+
+        Ok(response)
+    }
+}
+
+impl Default for CC23xxCC27xxFlashSequence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
+    fn erase_all(&self, interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
+        tracing::info!("CC23xx/CC27xx: Erasing all flash via SACI");
+
+        // Send erase chip command
+        self.saci_command(interface, saci_cmd::FLASH_ERASE_CHIP)?;
+
+        // Wait for erase to complete (can take several seconds)
+        let response = self.saci_read_response(interface, Duration::from_secs(30))?;
+
+        // Check result (bits 23:16 of response)
+        let result = SaciResult::from(((response >> 16) & 0xFF) as u8);
+        if result != SaciResult::Success {
+            tracing::error!("Flash erase chip failed with result: {:?}", result);
+            return Err(ArmError::Timeout);
+        }
+
+        tracing::info!("Flash erase chip completed successfully");
+        Ok(())
+    }
+
+    fn erase_sector(
+        &self,
+        _interface: &mut dyn ArmDebugInterface,
+        address: u64,
+    ) -> Result<(), ArmError> {
+        // CC23xx/CC27xx doesn't support individual sector erase
+        // The only way to erase is full chip erase
+        tracing::warn!(
+            "CC23xx/CC27xx: Individual sector erase at 0x{:08X} not supported, requires full chip erase",
+            address
+        );
+        Err(ArmError::NotImplemented("sector erase - use erase_all"))
+    }
+
+    fn program(
+        &self,
+        interface: &mut dyn ArmDebugInterface,
+        address: u64,
+        data: &[u8],
+    ) -> Result<(), ArmError> {
+        tracing::debug!(
+            "CC23xx/CC27xx: Programming {} bytes at 0x{:08X}",
+            data.len(),
+            address
+        );
+
+        // Build command header
+        let word_count = data.len().div_ceil(4);
+        let cmd_word = saci_cmd::FLASH_PROG_MAIN_PIPELINED | ((word_count as u32) << 16);
+        let addr_word = address as u32;
+
+        let mut words = vec![cmd_word, addr_word];
+
+        // Add data words (little endian, pad to word boundary)
+        for chunk in data.chunks(4) {
+            let mut word = 0u32;
+            for (i, &byte) in chunk.iter().enumerate() {
+                word |= (byte as u32) << (i * 8);
+            }
+            // Pad with 0xFF if chunk is less than 4 bytes
+            for i in chunk.len()..4 {
+                word |= 0xFF << (i * 8);
+            }
+            words.push(word);
+        }
+
+        // Send all words
+        self.saci_command_multi(interface, &words, Duration::from_millis(100))?;
+
+        // Wait for programming to complete
+        let response = self.saci_read_response(interface, Duration::from_secs(5))?;
+
+        // Check result
+        let result = SaciResult::from(((response >> 16) & 0xFF) as u8);
+        if result != SaciResult::Success {
+            tracing::error!(
+                "Flash program at 0x{:08X} failed with result: {:?}",
+                address,
+                result
+            );
+            return Err(ArmError::Timeout);
+        }
+
+        Ok(())
+    }
+
+    fn verify(
+        &self,
+        interface: &mut dyn ArmDebugInterface,
+        address: u64,
+        data: &[u8],
+    ) -> Result<bool, ArmError> {
+        tracing::debug!(
+            "CC23xx/CC27xx: Verifying {} bytes at 0x{:08X}",
+            data.len(),
+            address
+        );
+
+        // Calculate expected CRC32
+        let expected_crc = crc32_iso_hdlc(data);
+
+        // Build command
+        let word_count = data.len().div_ceil(4);
+        let cmd_word = saci_cmd::FLASH_VERIFY_MAIN_SECTORS | ((word_count as u32) << 16);
+        let addr_word = address as u32;
+        let crc_word = expected_crc;
+
+        let words = [cmd_word, addr_word, crc_word];
+        self.saci_command_multi(interface, &words, Duration::from_millis(10))?;
+
+        // Wait for verification
+        let response = self.saci_read_response(interface, Duration::from_secs(10))?;
+
+        // Check result
+        let result = SaciResult::from(((response >> 16) & 0xFF) as u8);
+        match result {
+            SaciResult::Success => Ok(true),
+            SaciResult::CrcMismatch => Ok(false),
+            _ => {
+                tracing::error!("Flash verify failed with result: {:?}", result);
+                Err(ArmError::Timeout)
+            }
+        }
+    }
+
+    fn flash_properties(&self) -> &FlashProperties {
+        &self.properties
     }
 }

@@ -19,6 +19,25 @@ pub enum TransferEncoding {
     Miniz,
 }
 
+/// The type of flash loader to use for programming.
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FlashLoaderType {
+    /// Traditional RAM-based flash algorithm.
+    ///
+    /// Flash algorithm code is loaded into target RAM and executed by the target CPU.
+    /// This is the default and most common approach.
+    #[default]
+    RamBased,
+
+    /// Host-side flash programming via debug interface.
+    ///
+    /// Flash operations are performed by the host PC via debug interface commands
+    /// (e.g., SACI for TI CC23xx/CC27xx). The target's debug sequence must implement
+    /// `DebugFlashSequence` for this to work.
+    HostSide,
+}
+
 /// The raw flash algorithm is the description of a flash algorithm,
 /// and is usually read from a target description file.
 ///
@@ -109,6 +128,13 @@ pub struct RawFlashAlgorithm {
     /// `true` if the instructions are saved in Big Endian format
     #[serde(default)]
     pub big_endian: bool,
+
+    /// The type of flash loader to use.
+    ///
+    /// Defaults to `RamBased` for backward compatibility. Set to `HostSide` for
+    /// devices that require host-side flash programming via debug interface commands.
+    #[serde(default)]
+    pub flash_loader_type: FlashLoaderType,
 }
 
 impl RawFlashAlgorithm {

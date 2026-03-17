@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use probe_rs_target::CoreType;
+use probe_rs_target::{CoreType, FlashProperties};
 
 use crate::{
     MemoryInterface, MemoryMappedRegister,
@@ -1138,6 +1138,15 @@ pub trait ArmDebugSequence: Send + Sync + Debug {
         None
     }
 
+    /// Return the Debug Flash Sequence implementation if it exists.
+    ///
+    /// This is used for host-side flash programming where the flash
+    /// operations are performed from the host via debug interface commands
+    /// rather than a RAM-based flash algorithm.
+    fn debug_flash_sequence(&self) -> Option<Arc<dyn DebugFlashSequence>> {
+        None
+    }
+
     /// Return the APs that are expected to work.
     fn allowed_access_ports(&self) -> Vec<u8> {
         (0..=255).collect()
@@ -1158,6 +1167,79 @@ pub trait DebugEraseSequence: Send + Sync {
     fn erase_all(&self, _interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
         Err(ArmError::NotImplemented("erase_all"))
     }
+}
+
+/// Host-side flash programming via the device's debug interface.
+///
+/// Some devices (e.g., TI CC23xx/CC27xx) require flash programming to be done
+/// from the host via debug interface commands rather than a RAM-based flash
+/// algorithm. This trait provides the interface for such implementations.
+///
+/// Vendors implement this trait in their debug sequence to support host-side
+/// flash programming. The implementation is typically accessed through
+/// [`ArmDebugSequence::debug_flash_sequence`].
+pub trait DebugFlashSequence: Send + Sync + Debug {
+    /// Erase all flash memory.
+    ///
+    /// # Errors
+    /// May fail due to communication issues with the device or if the device
+    /// is locked.
+    fn erase_all(&self, interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError>;
+
+    /// Erase a sector at the given address.
+    ///
+    /// # Arguments
+    /// * `interface` - The ARM debug interface
+    /// * `address` - The start address of the sector to erase
+    ///
+    /// # Errors
+    /// May fail if the address is invalid or due to communication issues.
+    fn erase_sector(
+        &self,
+        interface: &mut dyn ArmDebugInterface,
+        address: u64,
+    ) -> Result<(), ArmError>;
+
+    /// Program data to flash at the given address.
+    ///
+    /// # Arguments
+    /// * `interface` - The ARM debug interface
+    /// * `address` - The start address to program
+    /// * `data` - The data to program (must be aligned to page size)
+    ///
+    /// # Errors
+    /// May fail if the address is invalid, data is misaligned, or due to
+    /// communication issues.
+    fn program(
+        &self,
+        interface: &mut dyn ArmDebugInterface,
+        address: u64,
+        data: &[u8],
+    ) -> Result<(), ArmError>;
+
+    /// Verify data at the given address matches the expected data.
+    ///
+    /// # Arguments
+    /// * `interface` - The ARM debug interface
+    /// * `address` - The start address to verify
+    /// * `data` - The expected data
+    ///
+    /// # Returns
+    /// `Ok(true)` if verification passed, `Ok(false)` if data mismatch.
+    ///
+    /// # Errors
+    /// May fail due to communication issues with the device.
+    fn verify(
+        &self,
+        interface: &mut dyn ArmDebugInterface,
+        address: u64,
+        data: &[u8],
+    ) -> Result<bool, ArmError>;
+
+    /// Get the flash properties for this flash sequence.
+    ///
+    /// This includes page size, sector size, and flash region information.
+    fn flash_properties(&self) -> &FlashProperties;
 }
 
 /// Perform a SWD line reset (SWDIO high for 50 clock cycles)

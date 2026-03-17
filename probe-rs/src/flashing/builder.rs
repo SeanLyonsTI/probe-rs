@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::ops::Range;
 
-use probe_rs_target::{MemoryRange, NvmRegion, PageInfo};
+use probe_rs_target::{FlashProperties, MemoryRange, NvmRegion, PageInfo, SectorInfo};
 
 use super::{FlashAlgorithm, FlashError};
 
@@ -359,6 +359,189 @@ impl FlashBuilder {
 
         // Return the finished flash layout.
         Ok(layout)
+    }
+
+    /// Layouts the contents of flash memory using FlashProperties directly.
+    ///
+    /// This is used for host-side flash programming where we have FlashProperties
+    /// from a DebugFlashSequence rather than a full FlashAlgorithm.
+    pub(super) fn build_sectors_and_pages_from_properties(
+        &self,
+        region: &NvmRegion,
+        flash_properties: &FlashProperties,
+        include_empty_pages: bool,
+    ) -> Result<FlashLayout, FlashError> {
+        let mut layout = FlashLayout::default();
+
+        // Iterate over sectors
+        for info in Self::iter_sectors_from_properties(flash_properties) {
+            let range = info.address_range();
+
+            // Ignore the sector if it's outside the NvmRegion.
+            if !region.range.contains_range(&range) {
+                continue;
+            }
+
+            let page = Self::page_info_from_properties(flash_properties, info.base_address).unwrap();
+            let page_range = page.address_range();
+            let sector_has_data = self.has_data_in_range(&range);
+            let page_has_data = self.has_data_in_range(&page_range);
+
+            // Ignore if neither the sector nor the page contain any data.
+            if !sector_has_data && !page_has_data {
+                continue;
+            }
+
+            layout.sectors.push(FlashSector {
+                address: info.base_address,
+                size: info.size,
+            })
+        }
+
+        // Iterate over pages
+        for info in Self::iter_pages_from_properties(flash_properties) {
+            let range = info.address_range();
+
+            // Ignore the page if it's outside the NvmRegion.
+            if !region.range.contains_range(&range) {
+                continue;
+            }
+
+            let sector = Self::sector_info_from_properties(flash_properties, info.base_address).unwrap();
+            let sector_range = sector.address_range();
+            let sector_has_data = self.has_data_in_range(&sector_range);
+            let page_has_data = self.has_data_in_range(&range);
+
+            // If include_empty_pages, include the page if there's data in its sector, even if there's no data in the page.
+            if !page_has_data && (!include_empty_pages || !sector_has_data) {
+                continue;
+            }
+
+            let mut page = FlashPage::new(&info, flash_properties.erased_byte_value);
+
+            let mut fill_start_addr = info.base_address;
+
+            // Loop over all datablocks in the page.
+            for (address, data) in self.data_in_range(&range) {
+                // Copy data into the page buffer
+                let offset = (address - info.base_address) as usize;
+                page.data[offset..offset + data.len()].copy_from_slice(data);
+
+                // Fill the hole between the previous data block (or page start if there are no blocks) and current block.
+                if address > fill_start_addr {
+                    layout.fills.push(FlashFill {
+                        address: fill_start_addr,
+                        size: address - fill_start_addr,
+                        page_index: layout.pages.len(),
+                    });
+                }
+                fill_start_addr = address + data.len() as u64;
+            }
+
+            // Fill the hole between the last data block (or page start if there are no blocks) and page end.
+            if fill_start_addr < range.end {
+                layout.fills.push(FlashFill {
+                    address: fill_start_addr,
+                    size: range.end - fill_start_addr,
+                    page_index: layout.pages.len(),
+                });
+            }
+
+            layout.pages.push(page);
+        }
+
+        for (address, data) in self.data_in_range(&region.range) {
+            layout.data_blocks.push(FlashDataBlockSpan {
+                address,
+                size: data.len() as u64,
+            });
+        }
+
+        // Return the finished flash layout.
+        Ok(layout)
+    }
+
+    /// Helper to iterate sectors from FlashProperties.
+    fn iter_sectors_from_properties(
+        props: &FlashProperties,
+    ) -> impl Iterator<Item = SectorInfo> + '_ {
+        assert!(!props.sectors.is_empty());
+        assert!(props.sectors[0].address == 0);
+
+        let mut addr = props.address_range.start;
+        let mut desc_idx = 0;
+        std::iter::from_fn(move || {
+            if addr >= props.address_range.end {
+                return None;
+            }
+
+            // Advance desc_idx if needed
+            if let Some(next_desc) = props.sectors.get(desc_idx + 1)
+                && props.address_range.start + next_desc.address <= addr
+            {
+                desc_idx += 1;
+            }
+
+            let size = props.sectors[desc_idx].size;
+            let ret = SectorInfo {
+                base_address: addr,
+                size,
+            };
+            addr += size;
+            Some(ret)
+        })
+    }
+
+    /// Helper to iterate pages from FlashProperties.
+    fn iter_pages_from_properties(props: &FlashProperties) -> impl Iterator<Item = PageInfo> + '_ {
+        let mut addr = props.address_range.start;
+        std::iter::from_fn(move || {
+            if addr >= props.address_range.end {
+                return None;
+            }
+
+            let page = PageInfo {
+                base_address: addr,
+                size: props.page_size,
+            };
+            addr += props.page_size as u64;
+
+            Some(page)
+        })
+    }
+
+    /// Helper to get sector info from FlashProperties.
+    fn sector_info_from_properties(props: &FlashProperties, address: u64) -> Option<SectorInfo> {
+        if !props.address_range.contains(&address) {
+            return None;
+        }
+
+        let offset_address = address - props.address_range.start;
+
+        let containing_sector = props.sectors.iter().rfind(|s| s.address <= offset_address)?;
+
+        let sector_index = (offset_address - containing_sector.address) / containing_sector.size;
+
+        let sector_address = props.address_range.start
+            + containing_sector.address
+            + sector_index * containing_sector.size;
+
+        Some(SectorInfo {
+            base_address: sector_address,
+            size: containing_sector.size,
+        })
+    }
+
+    /// Helper to get page info from FlashProperties.
+    fn page_info_from_properties(props: &FlashProperties, address: u64) -> Option<PageInfo> {
+        if !props.address_range.contains(&address) {
+            return None;
+        }
+
+        Some(PageInfo {
+            base_address: address - (address % props.page_size as u64),
+            size: props.page_size,
+        })
     }
 }
 
