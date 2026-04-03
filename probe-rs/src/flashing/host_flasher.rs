@@ -7,13 +7,44 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use probe_rs_target::{NvmRegion, RawFlashAlgorithm};
+use probe_rs_target::{FlashProperties, NvmRegion, RawFlashAlgorithm, SectorDescription};
 
 use super::builder::FlashBuilder;
 use super::{FlashError, FlashLayout, FlashProgress};
 use crate::architecture::arm::sequences::DebugFlashSequence;
 use crate::flashing::flasher::FlashData;
 use crate::session::Session;
+
+/// Build a region-specific `FlashProperties` from an algorithm's full properties.
+///
+/// The algorithm's `flash_properties` covers the entire address space of all flash regions
+/// (e.g., MAIN + CCFG + SCFG).  When building a layout for a single `NvmRegion` we need
+/// properties scoped to just that region so the sector iterator doesn't traverse phantom
+/// sectors across the large gap between MAIN flash and the peripheral-mapped CCFG/SCFG.
+fn region_flash_props(algo_props: &FlashProperties, region_range: &std::ops::Range<u64>) -> FlashProperties {
+    let offset = region_range.start.saturating_sub(algo_props.address_range.start);
+
+    /* Find the sector descriptor whose address is <= the region offset (last such entry). */
+    let sector = algo_props
+        .sectors
+        .iter()
+        .rfind(|s| s.address <= offset)
+        .cloned()
+        .unwrap_or_else(|| algo_props.sectors[0]);
+
+    FlashProperties {
+        address_range: region_range.clone(),
+        page_size: sector.size as u32,
+        erased_byte_value: algo_props.erased_byte_value,
+        program_page_timeout: algo_props.program_page_timeout,
+        erase_sector_timeout: algo_props.erase_sector_timeout,
+        /* Single sector descriptor with offset 0 (relative to region start). */
+        sectors: vec![SectorDescription {
+            size: sector.size,
+            address: 0,
+        }],
+    }
+}
 
 /// A region loaded for host-side flash programming.
 pub(super) struct HostLoadedRegion {
@@ -70,11 +101,14 @@ impl HostSideFlasher {
         builder: &FlashBuilder,
         restore_unwritten_bytes: bool,
     ) -> Result<(), FlashError> {
-        // Build flash layout for this region using the flash properties from the sequence
-        let flash_props = self.flash_sequence.flash_properties();
+        /* Build region-specific flash properties from the algorithm's YAML-defined
+         * flash_properties.  Using the sequence's flash_properties() would give a
+         * hardcoded MAIN-only description that is wrong for CCFG and SCFG regions. */
+        let flash_props =
+            region_flash_props(&self.flash_algorithm.flash_properties, &region.range);
         let layout = builder.build_sectors_and_pages_from_properties(
             &region,
-            flash_props,
+            &flash_props,
             restore_unwritten_bytes,
         )?;
 
@@ -141,12 +175,23 @@ impl HostSideFlasher {
             .get_arm_interface()
             .map_err(|e| FlashError::Core(e.into()))?;
 
+        // If sector erase is not supported, fall back to chip erase once before programming.
+        if !skip_erasing && !self.flash_sequence.supports_sector_erase() {
+            tracing::info!("Host-side: Device does not support sector erase, using chip erase");
+            self.flash_sequence
+                .erase_all(interface)
+                .map_err(|e| FlashError::ChipEraseFailed {
+                    source: Box::new(e),
+                })?;
+            progress.finished_erasing();
+        }
+
         // Process each region
         for region in &self.regions {
             let layout = region.flash_layout();
 
-            // Erase sectors if not skipping
-            if !skip_erasing {
+            // Erase sectors if not skipping and sector erase is supported.
+            if !skip_erasing && self.flash_sequence.supports_sector_erase() {
                 tracing::debug!("Host-side: Erasing sectors");
                 for sector in layout.sectors() {
                     tracing::debug!(
@@ -204,6 +249,12 @@ impl HostSideFlasher {
                 }
             }
         }
+
+        /* Allow the sequence to perform end-of-flash cleanup (e.g., exit SACI mode
+         * and reset the device so subsequent debug sessions work normally). */
+        self.flash_sequence
+            .finish_flash(interface)
+            .map_err(|e| FlashError::Core(e.into()))?;
 
         Ok(())
     }

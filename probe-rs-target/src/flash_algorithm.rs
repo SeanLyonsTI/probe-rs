@@ -33,8 +33,7 @@ pub enum FlashLoaderType {
     /// Host-side flash programming via debug interface.
     ///
     /// Flash operations are performed by the host PC via debug interface commands
-    /// (e.g., SACI for TI CC23xx/CC27xx). The target's debug sequence must implement
-    /// `DebugFlashSequence` for this to work.
+    /// The target's debug sequence must implement `DebugFlashSequence` for this to work.
     HostSide,
 }
 

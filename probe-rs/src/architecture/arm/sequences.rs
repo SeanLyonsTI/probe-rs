@@ -1240,6 +1240,30 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
     ///
     /// This includes page size, sector size, and flash region information.
     fn flash_properties(&self) -> &FlashProperties;
+
+    /// Returns whether this device supports individual sector erase.
+    ///
+    /// Some devices (e.g., TI CC23xx/CC27xx) only support full chip erase and
+    /// do not have a sector-granularity erase command. When this returns `false`,
+    /// the host-side flasher will call [`erase_all`](Self::erase_all) instead of
+    /// iterating over sectors.
+    ///
+    /// Defaults to `true`.
+    fn supports_sector_erase(&self) -> bool {
+        true
+    }
+
+    /// Called after all flash operations (erase, program, verify) are complete.
+    ///
+    /// Implementations should use this to exit any special programming mode and
+    /// leave the device in a clean, debuggable state.  For example, a SACI-based
+    /// implementation sends the run/exit command so that subsequent debug sessions
+    /// can attach normally.
+    ///
+    /// The default implementation does nothing.
+    fn finish_flash(&self, _interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
+        Ok(())
+    }
 }
 
 /// Perform a SWD line reset (SWDIO high for 50 clock cycles)
