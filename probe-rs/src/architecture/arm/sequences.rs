@@ -1264,6 +1264,18 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
     fn finish_flash(&self, _interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
         Ok(())
     }
+
+    /// Called before a standalone verify pass (when verify is run as a separate
+    /// step after `finish_flash`).
+    ///
+    /// For devices that require a special mode for verification (e.g., SACI on
+    /// CC23xx/CC27xx), this allows re-entering that mode before the verify
+    /// commands are sent.
+    ///
+    /// The default implementation does nothing.
+    fn prepare_verify(&self, _interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
+        Ok(())
+    }
 }
 
 /// Perform a SWD line reset (SWDIO high for 50 clock cycles)

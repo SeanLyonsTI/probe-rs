@@ -275,6 +275,12 @@ impl HostSideFlasher {
             .get_arm_interface()
             .map_err(|e| FlashError::Core(e.into()))?;
 
+        /* Allow the sequence to enter any required mode before verifying
+         * (e.g., re-enter SACI mode for CC23xx/CC27xx after finish_flash). */
+        self.flash_sequence
+            .prepare_verify(interface)
+            .map_err(|e| FlashError::Core(e.into()))?;
+
         for region in &self.regions {
             let layout = region.flash_layout();
             for page in layout.pages() {
@@ -292,6 +298,11 @@ impl HostSideFlasher {
                 }
             }
         }
+
+        /* Exit any special verification mode and leave the device in a clean state. */
+        self.flash_sequence
+            .finish_flash(interface)
+            .map_err(|e| FlashError::Core(e.into()))?;
 
         Ok(true)
     }

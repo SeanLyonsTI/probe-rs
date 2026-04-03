@@ -965,8 +965,14 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
         );
 
         if address >= SCFG_START {
-            /* FLASH_VERIFY_SCFG_SECTOR (0x1B): [header(check_exp_crc=1), expCrc32] */
-            let expected_crc = crc32_iso_hdlc(data);
+            /* FLASH_VERIFY_SCFG_SECTOR (0x1B): [header(check_exp_crc=1), expCrc32]
+             *
+             * The ROM verifies CRC over only the first 0xE4 (228) bytes of SCFG,
+             * matching the range covered by Scfg::update_crcs() and OpenOCD's
+             * SCFG_CONTENT_SIZE constant.  The trailing key-ring slots are excluded. */
+            const SCFG_CRC_BYTE_COUNT: usize = 0xE4;
+            let crc_data = &data[..data.len().min(SCFG_CRC_BYTE_COUNT)];
+            let expected_crc = crc32_iso_hdlc(crc_data);
             let header = Self::make_header(saci_cmd::FLASH_VERIFY_SCFG_SECTOR, 0x0001);
             let words = [header, expected_crc];
             self.saci_send_words(interface, &words, Duration::from_millis(100))?;
@@ -1015,14 +1021,39 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
         false
     }
 
-    fn finish_flash(&self, _interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
-        /* The saci_flash_mode flag will be reset to false by Drop when this struct
-         * is dropped.  The device remains in SACI mode; the next call to
-         * debug_port_connect will assert nRESET (giving the ROM a fresh start with
-         * isExitAllowed=true), and then debug_port_start will exit SACI normally. */
-        tracing::info!(
-            "CC23xx/CC27xx: Flash complete. Next debug_port_connect will reset the device."
-        );
+    fn prepare_verify(&self, interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
+        /* When verify runs as a separate pass after finish_flash() exited SACI,
+         * the device is in normal debug mode.  We need to re-enter SACI to send
+         * FLASH_VERIFY_* commands.  If already in SACI mode (inline verify during
+         * program()), this is a no-op. */
+        if matches!(DeviceStatusRegister::read(interface), Ok(s) if s.ahb_ap_available()) {
+            tracing::info!(
+                "CC23xx/CC27xx: Prepare verify — device not in SACI, re-entering"
+            );
+            self.reset_into_saci_mode(interface)?;
+        }
+        Ok(())
+    }
+
+    fn finish_flash(&self, interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
+        /* The session is reused between the flash operation and post-flash debug
+         * access, so the device must be out of SACI mode before we return.
+         *
+         * Sequence (matches OpenOCD `cc27xx reset_halt` after programming):
+         * 1. Clear saci_flash_mode so the next debug_port_start exits SACI.
+         * 2. Call reinitialize() which triggers debug_port_connect (nRESET → SACI)
+         *    then debug_port_start (EXIT_SACI_HALT → device boots, AHB-AP available).
+         */
+        tracing::info!("CC23xx/CC27xx: Flash complete, exiting SACI for normal debug access");
+
+        /* Step 1: Clear the flag BEFORE reinitialize so debug_port_start sends
+         * EXIT_SACI_HALT instead of staying in SACI mode. */
+        self.saci_flash_mode.store(false, Ordering::SeqCst);
+
+        /* Step 2: Reinitialize → debug_port_connect (nRESET) → debug_port_start
+         * (EXIT_SACI_HALT) → device exits SACI and enters boot wait loop. */
+        interface.reinitialize()?;
+
         Ok(())
     }
 }
