@@ -102,8 +102,7 @@ impl HostSideFlasher {
         restore_unwritten_bytes: bool,
     ) -> Result<(), FlashError> {
         /* Build region-specific flash properties from the algorithm's YAML-defined
-         * flash_properties.  Using the sequence's flash_properties() would give a
-         * hardcoded MAIN-only description that is wrong for CCFG and SCFG regions. */
+         * flash_properties, scoped to exactly this NvmRegion. */
         let flash_props =
             region_flash_props(&self.flash_algorithm.flash_properties, &region.range);
         let layout = builder.build_sectors_and_pages_from_properties(

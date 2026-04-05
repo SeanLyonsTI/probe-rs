@@ -1,0 +1,10 @@
+# CC2745R10Q1 smoke test configuration
+# Note: reset_connected is false because CC23xx/CC27xx devices use an IceMelter
+# circuit that doesn't support attach_under_reset. The device must be power-cycled
+# to recover if a hardware reset is performed during debug.
+chip = "CC2745R10Q1"
+probe_selector = "1cbe:02a5"
+probe_speed = 4000
+protocol = "Swd"
+reset_connected = false
+flash_test_binary = "/home/a0225155/git/ti-simplelink-pacs/target/thumbv8m.main-none-eabihf/debug/cc27xxx10"

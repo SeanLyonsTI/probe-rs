@@ -1,0 +1,9 @@
+# CC2340R5 smoke test configuration
+# Note: reset_connected is false because CC23xx/CC27xx devices use an IceMelter
+# circuit that doesn't support attach_under_reset. The device must be power-cycled
+# to recover if a hardware reset is performed during debug.
+chip = "CC2340R5"
+probe_selector = "1cbe:02a5:LS4201JL"
+probe_speed = 1000
+protocol = "Swd"
+reset_connected = false

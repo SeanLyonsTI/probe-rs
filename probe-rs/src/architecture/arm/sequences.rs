@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use probe_rs_target::{CoreType, FlashProperties};
+use probe_rs_target::CoreType;
 
 use crate::{
     MemoryInterface, MemoryMappedRegister,
@@ -1188,6 +1188,10 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
 
     /// Erase a sector at the given address.
     ///
+    /// Only called when [`supports_sector_erase`](Self::supports_sector_erase) returns `true`.
+    /// The default implementation returns `NotImplemented`; devices that support sector-granularity
+    /// erase should override both this method and `supports_sector_erase`.
+    ///
     /// # Arguments
     /// * `interface` - The ARM debug interface
     /// * `address` - The start address of the sector to erase
@@ -1196,9 +1200,11 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
     /// May fail if the address is invalid or due to communication issues.
     fn erase_sector(
         &self,
-        interface: &mut dyn ArmDebugInterface,
-        address: u64,
-    ) -> Result<(), ArmError>;
+        _interface: &mut dyn ArmDebugInterface,
+        _address: u64,
+    ) -> Result<(), ArmError> {
+        Err(ArmError::NotImplemented("sector erase"))
+    }
 
     /// Program data to flash at the given address.
     ///
@@ -1235,11 +1241,6 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
         address: u64,
         data: &[u8],
     ) -> Result<bool, ArmError>;
-
-    /// Get the flash properties for this flash sequence.
-    ///
-    /// This includes page size, sector size, and flash region information.
-    fn flash_properties(&self) -> &FlashProperties;
 
     /// Returns whether this device supports individual sector erase.
     ///

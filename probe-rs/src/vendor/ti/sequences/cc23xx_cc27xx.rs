@@ -16,7 +16,7 @@ use crate::architecture::arm::dp::{Abort, Ctrl, DebugPortError, DpAccess, DpAddr
 use crate::architecture::arm::memory::ArmMemoryInterface;
 use crate::architecture::arm::sequences::{ArmDebugSequence, DebugFlashSequence, cortex_m_core_start};
 use crate::architecture::arm::{ArmError, FullyQualifiedApAddress};
-use probe_rs_target::{CoreType, FlashProperties, SectorDescription};
+use probe_rs_target::CoreType;
 
 /// Marker struct indicating initialization sequencing for cc23xx_cc27xx family parts.
 #[derive(Debug)]
@@ -603,8 +603,6 @@ impl ArmDebugSequence for CC23xxCC27xx {
 /// automatically reset to `false` when this struct is dropped.
 #[derive(Debug)]
 pub struct CC23xxCC27xxFlashSequence {
-    /// Flash properties for the device
-    properties: FlashProperties,
     /// Shared flag with CC23xxCC27xx to suppress EXIT_SACI during flash.
     saci_flash_mode: Arc<AtomicBool>,
 }
@@ -617,20 +615,7 @@ impl CC23xxCC27xxFlashSequence {
     /// EXIT_SACI command.
     pub fn new_with_flag(saci_flash_mode: Arc<AtomicBool>) -> Self {
         saci_flash_mode.store(true, Ordering::SeqCst);
-        Self {
-            properties: FlashProperties {
-                address_range: 0..0x0008_0000,
-                page_size: 2048,
-                erased_byte_value: 0xFF,
-                program_page_timeout: 1000,
-                erase_sector_timeout: 5000,
-                sectors: vec![SectorDescription {
-                    size: 2048,
-                    address: 0,
-                }],
-            },
-            saci_flash_mode,
-        }
+        Self { saci_flash_mode }
     }
 
     /// Fallback constructor (no shared flag — used in tests or standalone contexts).
@@ -678,7 +663,7 @@ impl CC23xxCC27xxFlashSequence {
             if start.elapsed() >= timeout {
                 return Err(ArmError::Timeout);
             }
-            thread::sleep(Duration::from_micros(100));
+            thread::sleep(Duration::from_micros(5));
         }
     }
 
@@ -916,21 +901,6 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
         Ok(())
     }
 
-    fn erase_sector(
-        &self,
-        _interface: &mut dyn ArmDebugInterface,
-        address: u64,
-    ) -> Result<(), ArmError> {
-        /* Individual sector erase is not supported via SACI; only chip erase is
-         * available.  The HostSideFlasher checks supports_sector_erase() and falls
-         * back to erase_all() automatically. */
-        tracing::warn!(
-            "CC23xx/CC27xx: Sector erase at 0x{:08X} not supported (chip erase only)",
-            address
-        );
-        Err(ArmError::NotImplemented("sector erase - use erase_all"))
-    }
-
     fn program(
         &self,
         interface: &mut dyn ArmDebugInterface,
@@ -1011,10 +981,6 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
                 _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_MAIN_SECTORS failed: {result:?}"))),
             }
         }
-    }
-
-    fn flash_properties(&self) -> &FlashProperties {
-        &self.properties
     }
 
     fn supports_sector_erase(&self) -> bool {

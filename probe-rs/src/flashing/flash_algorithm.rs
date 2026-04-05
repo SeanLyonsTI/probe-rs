@@ -273,6 +273,32 @@ impl FlashAlgorithm {
     ) -> Result<Self, FlashError> {
         use std::mem::size_of;
 
+        /* Validate that all fields required by a RAM-based flash algorithm are present. */
+        if raw.instructions.is_empty() {
+            return Err(FlashError::MissingRamAlgorithmField {
+                name: raw.name.clone(),
+                field: "instructions",
+            });
+        }
+        let pc_program_page =
+            raw.pc_program_page
+                .ok_or_else(|| FlashError::MissingRamAlgorithmField {
+                    name: raw.name.clone(),
+                    field: "pc_program_page",
+                })?;
+        let pc_erase_sector =
+            raw.pc_erase_sector
+                .ok_or_else(|| FlashError::MissingRamAlgorithmField {
+                    name: raw.name.clone(),
+                    field: "pc_erase_sector",
+                })?;
+        let data_section_offset =
+            raw.data_section_offset
+                .ok_or_else(|| FlashError::MissingRamAlgorithmField {
+                    name: raw.name.clone(),
+                    field: "data_section_offset",
+                })?;
+
         let assembled_instructions = raw.instructions.chunks_exact(size_of::<u32>());
 
         let remainder = assembled_instructions.remainder();
@@ -436,14 +462,14 @@ impl FlashAlgorithm {
             instructions,
             pc_init: raw.pc_init.map(|v| code_start + v),
             pc_uninit: raw.pc_uninit.map(|v| code_start + v),
-            pc_program_page: code_start + raw.pc_program_page,
-            pc_erase_sector: code_start + raw.pc_erase_sector,
+            pc_program_page: code_start + pc_program_page,
+            pc_erase_sector: code_start + pc_erase_sector,
             pc_erase_all: raw.pc_erase_all.map(|v| code_start + v),
             pc_verify: raw.pc_verify.map(|v| code_start + v),
             pc_blank_check: raw.pc_blank_check.map(|v| code_start + v),
             pc_read: raw.pc_read.map(|v| code_start + v),
             pc_flash_size: raw.pc_flash_size.map(|v| code_start + v),
-            static_base: code_start + raw.data_section_offset,
+            static_base: code_start + data_section_offset,
             stack_top,
             stack_size,
             page_buffers,
@@ -461,6 +487,21 @@ impl FlashAlgorithm {
         core_name: &str,
         target: &Target,
     ) -> Result<FlashAlgorithm, FlashError> {
+        use probe_rs_target::FlashLoaderType;
+
+        /* HostSide algorithms are not assembled into RAM — they have no instructions,
+         * load address, or PC entry points.  Return a minimal stub so callers that
+         * iterate all algorithms (e.g. the validate_builtin test) don't need to
+         * special-case the loader type. */
+        if algo.flash_loader_type == FlashLoaderType::HostSide {
+            return Ok(FlashAlgorithm {
+                name: algo.name.clone(),
+                default: algo.default,
+                flash_properties: algo.flash_properties.clone(),
+                ..Default::default()
+            });
+        }
+
         // Find a RAM region from which we can run the algo.
         let mm = &target.memory_map;
 
