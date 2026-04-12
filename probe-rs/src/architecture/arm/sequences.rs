@@ -10,6 +10,8 @@ use std::{
 
 use probe_rs_target::CoreType;
 
+pub use crate::flashing::DebugFlashSequence;
+
 use crate::{
     MemoryInterface, MemoryMappedRegister,
     architecture::arm::{
@@ -1169,115 +1171,8 @@ pub trait DebugEraseSequence: Send + Sync {
     }
 }
 
-/// Host-side flash programming via the device's debug interface.
-///
-/// Some devices (e.g., TI CC23xx/CC27xx) require flash programming to be done
-/// from the host via debug interface commands rather than a RAM-based flash
-/// algorithm. This trait provides the interface for such implementations.
-///
-/// Vendors implement this trait in their debug sequence to support host-side
-/// flash programming. The implementation is typically accessed through
-/// [`ArmDebugSequence::debug_flash_sequence`].
-pub trait DebugFlashSequence: Send + Sync + Debug {
-    /// Erase all flash memory.
-    ///
-    /// # Errors
-    /// May fail due to communication issues with the device or if the device
-    /// is locked.
-    fn erase_all(&self, interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError>;
-
-    /// Erase a sector at the given address.
-    ///
-    /// Only called when [`supports_sector_erase`](Self::supports_sector_erase) returns `true`.
-    /// The default implementation returns `NotImplemented`; devices that support sector-granularity
-    /// erase should override both this method and `supports_sector_erase`.
-    ///
-    /// # Arguments
-    /// * `interface` - The ARM debug interface
-    /// * `address` - The start address of the sector to erase
-    ///
-    /// # Errors
-    /// May fail if the address is invalid or due to communication issues.
-    fn erase_sector(
-        &self,
-        _interface: &mut dyn ArmDebugInterface,
-        _address: u64,
-    ) -> Result<(), ArmError> {
-        Err(ArmError::NotImplemented("sector erase"))
-    }
-
-    /// Program data to flash at the given address.
-    ///
-    /// # Arguments
-    /// * `interface` - The ARM debug interface
-    /// * `address` - The start address to program
-    /// * `data` - The data to program (must be aligned to page size)
-    ///
-    /// # Errors
-    /// May fail if the address is invalid, data is misaligned, or due to
-    /// communication issues.
-    fn program(
-        &self,
-        interface: &mut dyn ArmDebugInterface,
-        address: u64,
-        data: &[u8],
-    ) -> Result<(), ArmError>;
-
-    /// Verify data at the given address matches the expected data.
-    ///
-    /// # Arguments
-    /// * `interface` - The ARM debug interface
-    /// * `address` - The start address to verify
-    /// * `data` - The expected data
-    ///
-    /// # Returns
-    /// `Ok(true)` if verification passed, `Ok(false)` if data mismatch.
-    ///
-    /// # Errors
-    /// May fail due to communication issues with the device.
-    fn verify(
-        &self,
-        interface: &mut dyn ArmDebugInterface,
-        address: u64,
-        data: &[u8],
-    ) -> Result<bool, ArmError>;
-
-    /// Returns whether this device supports individual sector erase.
-    ///
-    /// Some devices (e.g., TI CC23xx/CC27xx) only support full chip erase and
-    /// do not have a sector-granularity erase command. When this returns `false`,
-    /// the host-side flasher will call [`erase_all`](Self::erase_all) instead of
-    /// iterating over sectors.
-    ///
-    /// Defaults to `true`.
-    fn supports_sector_erase(&self) -> bool {
-        true
-    }
-
-    /// Called after all flash operations (erase, program, verify) are complete.
-    ///
-    /// Implementations should use this to exit any special programming mode and
-    /// leave the device in a clean, debuggable state.  For example, a SACI-based
-    /// implementation sends the run/exit command so that subsequent debug sessions
-    /// can attach normally.
-    ///
-    /// The default implementation does nothing.
-    fn finish_flash(&self, _interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
-        Ok(())
-    }
-
-    /// Called before a standalone verify pass (when verify is run as a separate
-    /// step after `finish_flash`).
-    ///
-    /// For devices that require a special mode for verification (e.g., SACI on
-    /// CC23xx/CC27xx), this allows re-entering that mode before the verify
-    /// commands are sent.
-    ///
-    /// The default implementation does nothing.
-    fn prepare_verify(&self, _interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
-        Ok(())
-    }
-}
+/* DebugFlashSequence is defined in crate::flashing::host_sequence and re-exported above.
+ * It is architecture-agnostic and takes &mut Session rather than &mut dyn ArmDebugInterface. */
 
 /// Perform a SWD line reset (SWDIO high for 50 clock cycles)
 ///

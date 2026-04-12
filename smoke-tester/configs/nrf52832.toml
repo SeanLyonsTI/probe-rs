@@ -1,0 +1,6 @@
+chip = "nRF52832_xxAA"
+probe_selector = "1366:1015:000682097872"
+probe_speed = 1000
+protocol = "Swd"
+reset_connected = false
+flash_test_binary = "../../probe-rs-debug/tests/debug-unwind-tests/nRF52833_xxAA_full_unwind.elf"

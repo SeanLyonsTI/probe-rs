@@ -7,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::MemoryMappedRegister;
+use crate::Session;
 use crate::architecture::arm::ArmDebugInterface;
 use crate::architecture::arm::DapAccess;
 use crate::architecture::arm::DapProbe;
@@ -14,7 +15,8 @@ use crate::architecture::arm::armv6m::{Aircr, BpCtrl, Demcr, Dhcsr};
 use crate::architecture::arm::core::cortex_m;
 use crate::architecture::arm::dp::{Abort, Ctrl, DebugPortError, DpAccess, DpAddress, SelectV1};
 use crate::architecture::arm::memory::ArmMemoryInterface;
-use crate::architecture::arm::sequences::{ArmDebugSequence, DebugFlashSequence, cortex_m_core_start};
+use crate::architecture::arm::sequences::{ArmDebugSequence, cortex_m_core_start};
+use crate::flashing::DebugFlashSequence;
 use crate::architecture::arm::{ArmError, FullyQualifiedApAddress};
 use probe_rs_target::CoreType;
 
@@ -881,7 +883,9 @@ const CCFG_START: u64 = 0x4E02_0000;
 const SCFG_START: u64 = 0x4E04_0000;
 
 impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
-    fn erase_all(&self, interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
+    fn erase_all(&self, session: &mut Session) -> Result<(), crate::Error> {
+        let interface = session.get_arm_interface()?;
+
         /* debug_port_start exited SACI mode to access the AHB-AP.  A hardware
          * reset via nRESET is required to re-enter SACI mode before flash
          * commands can be accepted. */
@@ -903,36 +907,41 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
 
     fn program(
         &self,
-        interface: &mut dyn ArmDebugInterface,
+        session: &mut Session,
         address: u64,
         data: &[u8],
-    ) -> Result<(), ArmError> {
+    ) -> Result<(), crate::Error> {
         tracing::debug!(
             "CC23xx/CC27xx: Programming {} bytes at 0x{:08X}",
             data.len(),
             address
         );
 
+        let interface = session.get_arm_interface()?;
+
         if address >= SCFG_START {
-            self.program_scfg(interface, data)
+            self.program_scfg(interface, data)?;
         } else if address >= CCFG_START {
-            self.program_ccfg(interface, data)
+            self.program_ccfg(interface, data)?;
         } else {
-            self.program_main(interface, address, data)
+            self.program_main(interface, address, data)?;
         }
+        Ok(())
     }
 
     fn verify(
         &self,
-        interface: &mut dyn ArmDebugInterface,
+        session: &mut Session,
         address: u64,
         data: &[u8],
-    ) -> Result<bool, ArmError> {
+    ) -> Result<bool, crate::Error> {
         tracing::debug!(
             "CC23xx/CC27xx: Verifying {} bytes at 0x{:08X}",
             data.len(),
             address
         );
+
+        let interface = session.get_arm_interface()?;
 
         if address >= SCFG_START {
             /* FLASH_VERIFY_SCFG_SECTOR (0x1B): [header(check_exp_crc=1), expCrc32]
@@ -951,7 +960,7 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
             match result {
                 SaciResult::Success => Ok(true),
                 SaciResult::Crc32Mismatch => Ok(false),
-                _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_SCFG_SECTOR failed: {result:?}"))),
+                _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_SCFG_SECTOR failed: {result:?}")).into()),
             }
         } else if address >= CCFG_START {
             /* FLASH_VERIFY_CCFG_SECTOR (0x11): simplest form — check_exp_crcs=0,
@@ -965,7 +974,7 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
             match result {
                 SaciResult::Success => Ok(true),
                 SaciResult::Crc32Mismatch | SaciResult::BlankCheckFailed => Ok(false),
-                _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_CCFG_SECTOR failed: {result:?}"))),
+                _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_CCFG_SECTOR failed: {result:?}")).into()),
             }
         } else {
             /* FLASH_VERIFY_MAIN_SECTORS (0x10): [header, firstSectorAddr, byteCount, expCrc32] */
@@ -978,7 +987,7 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
             match result {
                 SaciResult::Success => Ok(true),
                 SaciResult::Crc32Mismatch => Ok(false),
-                _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_MAIN_SECTORS failed: {result:?}"))),
+                _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_MAIN_SECTORS failed: {result:?}")).into()),
             }
         }
     }
@@ -987,7 +996,9 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
         false
     }
 
-    fn prepare_verify(&self, interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
+    fn prepare_verify(&self, session: &mut Session) -> Result<(), crate::Error> {
+        let interface = session.get_arm_interface()?;
+
         /* When verify runs as a separate pass after finish_flash() exited SACI,
          * the device is in normal debug mode.  We need to re-enter SACI to send
          * FLASH_VERIFY_* commands.  If already in SACI mode (inline verify during
@@ -1001,7 +1012,7 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
         Ok(())
     }
 
-    fn finish_flash(&self, interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
+    fn finish_flash(&self, session: &mut Session) -> Result<(), crate::Error> {
         /* The session is reused between the flash operation and post-flash debug
          * access, so the device must be out of SACI mode before we return.
          *
@@ -1018,6 +1029,7 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
 
         /* Step 2: Reinitialize → debug_port_connect (nRESET) → debug_port_start
          * (EXIT_SACI_HALT) → device exits SACI and enters boot wait loop. */
+        let interface = session.get_arm_interface()?;
         interface.reinitialize()?;
 
         Ok(())

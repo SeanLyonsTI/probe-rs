@@ -50,6 +50,7 @@ mod error;
 mod flash_algorithm;
 mod flasher;
 mod host_flasher;
+pub mod host_sequence;
 mod loader;
 mod progress;
 
@@ -64,5 +65,6 @@ pub use flasher::{
     ActiveFlasher, Erase, FlashData, Flasher, LoadedRegion, Operation, Program, Verify,
 };
 pub use host_flasher::HostSideFlasher;
+pub use host_sequence::DebugFlashSequence;
 pub use loader::*;
 pub use progress::*;

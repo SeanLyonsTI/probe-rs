@@ -14,7 +14,6 @@ use super::builder::FlashBuilder;
 use super::host_flasher::HostSideFlasher;
 use super::{DownloadOptions, FileDownloadError, FlashError, Flasher};
 use crate::Target;
-use crate::config::DebugSequence;
 use crate::flashing::progress::ProgressOperation;
 use crate::flashing::{FlashLayout, FlashProgress};
 use crate::memory::MemoryInterface;
@@ -1056,21 +1055,17 @@ impl FlashLoader {
                         f.add_region(region, &self.builder, restore_unwritten_bytes)?;
                     }
                 } else {
-                    // Get the debug flash sequence from the ARM debug sequence
-                    let flash_sequence = match &session.target().debug_sequence {
-                        DebugSequence::Arm(seq) => seq.debug_flash_sequence().ok_or_else(|| {
-                            FlashError::NoFlashLoaderAlgorithmAttached {
-                                name: target.name.clone(),
-                                range: region.range.clone(),
-                            }
-                        })?,
-                        _ => {
-                            return Err(FlashError::NoFlashLoaderAlgorithmAttached {
-                                name: target.name.clone(),
-                                range: region.range.clone(),
-                            });
-                        }
-                    };
+                    /* Get the host-side flash sequence via the architecture-agnostic
+                     * DebugSequence::debug_flash_sequence() dispatcher.  This works for
+                     * ARM, RISC-V, and Xtensa targets uniformly. */
+                    let flash_sequence = session
+                        .target()
+                        .debug_sequence
+                        .debug_flash_sequence()
+                        .ok_or_else(|| FlashError::NoFlashLoaderAlgorithmAttached {
+                            name: target.name.clone(),
+                            range: region.range.clone(),
+                        })?;
 
                     let mut flasher = HostSideFlasher::new(flash_sequence, core, algo.clone());
                     flasher.add_region(region, &self.builder, restore_unwritten_bytes)?;

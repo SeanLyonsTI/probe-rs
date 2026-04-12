@@ -1,0 +1,4 @@
+chip = "esp32c6"
+probe_selector = "303a:1001:48:F6:EE:D3:EA:1C"
+protocol = "Jtag"
+reset_connected = false
