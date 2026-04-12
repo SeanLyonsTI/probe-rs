@@ -1171,8 +1171,8 @@ pub trait DebugEraseSequence: Send + Sync {
     }
 }
 
-/* DebugFlashSequence is defined in crate::flashing::host_sequence and re-exported above.
- * It is architecture-agnostic and takes &mut Session rather than &mut dyn ArmDebugInterface. */
+// DebugFlashSequence is defined in crate::flashing::host_sequence and re-exported above.
+// It is architecture-agnostic and takes &mut Session rather than &mut dyn ArmDebugInterface.
 
 /// Perform a SWD line reset (SWDIO high for 50 clock cycles)
 ///

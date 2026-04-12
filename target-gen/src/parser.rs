@@ -121,8 +121,10 @@ pub fn extract_flash_algo(
         );
 
         algo.load_address = Some(algorithm_binary.code_section.load_address as u64);
-        algo.data_section_offset = Some((algorithm_binary.data_section.start
-            - algorithm_binary.code_section.load_address) as u64);
+        algo.data_section_offset = Some(
+            (algorithm_binary.data_section.start - algorithm_binary.code_section.load_address)
+                as u64,
+        );
     } else {
         algo.data_section_offset = Some(algorithm_binary.data_section.start as u64);
     }

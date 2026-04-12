@@ -11,8 +11,8 @@ use probe_rs_target::{FlashProperties, NvmRegion, RawFlashAlgorithm, SectorDescr
 
 use super::builder::FlashBuilder;
 use super::{FlashError, FlashLayout, FlashProgress};
-use crate::flashing::host_sequence::DebugFlashSequence;
 use crate::flashing::flasher::FlashData;
+use crate::flashing::host_sequence::DebugFlashSequence;
 use crate::session::Session;
 
 /// Build a region-specific `FlashProperties` from an algorithm's full properties.
@@ -21,10 +21,15 @@ use crate::session::Session;
 /// (e.g., MAIN + CCFG + SCFG).  When building a layout for a single `NvmRegion` we need
 /// properties scoped to just that region so the sector iterator doesn't traverse phantom
 /// sectors across the large gap between MAIN flash and the peripheral-mapped CCFG/SCFG.
-fn region_flash_props(algo_props: &FlashProperties, region_range: &std::ops::Range<u64>) -> FlashProperties {
-    let offset = region_range.start.saturating_sub(algo_props.address_range.start);
+fn region_flash_props(
+    algo_props: &FlashProperties,
+    region_range: &std::ops::Range<u64>,
+) -> FlashProperties {
+    let offset = region_range
+        .start
+        .saturating_sub(algo_props.address_range.start);
 
-    /* Find the sector descriptor whose address is <= the region offset (last such entry). */
+    // Find the sector descriptor whose address is <= the region offset (last such entry).
     let sector = algo_props
         .sectors
         .iter()
@@ -38,7 +43,7 @@ fn region_flash_props(algo_props: &FlashProperties, region_range: &std::ops::Ran
         erased_byte_value: algo_props.erased_byte_value,
         program_page_timeout: algo_props.program_page_timeout,
         erase_sector_timeout: algo_props.erase_sector_timeout,
-        /* Single sector descriptor with offset 0 (relative to region start). */
+        // Single sector descriptor with offset 0 (relative to region start).
         sectors: vec![SectorDescription {
             size: sector.size,
             address: 0,
@@ -101,10 +106,9 @@ impl HostSideFlasher {
         builder: &FlashBuilder,
         restore_unwritten_bytes: bool,
     ) -> Result<(), FlashError> {
-        /* Build region-specific flash properties from the algorithm's YAML-defined
-         * flash_properties, scoped to exactly this NvmRegion. */
-        let flash_props =
-            region_flash_props(&self.flash_algorithm.flash_properties, &region.range);
+        // Build region-specific flash properties from the algorithm's YAML-defined
+        // flash_properties, scoped to exactly this NvmRegion.
+        let flash_props = region_flash_props(&self.flash_algorithm.flash_properties, &region.range);
         let layout = builder.build_sectors_and_pages_from_properties(
             &region,
             &flash_props,
@@ -164,8 +168,8 @@ impl HostSideFlasher {
     ) -> Result<(), FlashError> {
         tracing::debug!("Host-side: Starting program procedure");
 
-        /* Allow the sequence to perform any required setup (e.g. enter a special
-         * programming mode or release the probe for an external toolbox). */
+        // Allow the sequence to perform any required setup (e.g. enter a special
+        // programming mode or release the probe for an external toolbox).
         self.flash_sequence
             .prepare_flash(session)
             .map_err(FlashError::Core)?;
@@ -181,9 +185,9 @@ impl HostSideFlasher {
             progress.finished_erasing();
         }
 
-        /* Check whether the sequence supports whole-image programming.  If so,
-         * collect all (region, layout) pairs and call program_image() once instead
-         * of the per-page loop below. */
+        // Check whether the sequence supports whole-image programming.  If so,
+        // collect all (region, layout) pairs and call program_image() once instead
+        // of the per-page loop below.
         let region_layouts: Vec<(&NvmRegion, &FlashLayout)> = self
             .regions
             .iter()
@@ -192,7 +196,7 @@ impl HostSideFlasher {
 
         if let Some(result) = self.flash_sequence.program_image(session, &region_layouts) {
             result.map_err(FlashError::Core)?;
-            /* Progress reporting for whole-image: report all pages as programmed. */
+            // Progress reporting for whole-image: report all pages as programmed.
             for r in &self.regions {
                 let layout = r.flash_layout();
                 for page in layout.pages() {
@@ -266,8 +270,8 @@ impl HostSideFlasher {
             }
         }
 
-        /* Allow the sequence to perform end-of-flash cleanup (e.g., exit SACI mode
-         * and reset the device so subsequent debug sessions work normally). */
+        // Allow the sequence to perform end-of-flash cleanup (e.g., exit SACI mode
+        // and reset the device so subsequent debug sessions work normally).
         self.flash_sequence
             .finish_flash(session)
             .map_err(FlashError::Core)?;
@@ -286,8 +290,8 @@ impl HostSideFlasher {
     ) -> Result<bool, FlashError> {
         tracing::debug!("Host-side: Starting verify procedure");
 
-        /* Allow the sequence to enter any required mode before verifying
-         * (e.g., re-enter SACI mode for CC23xx/CC27xx after finish_flash). */
+        // Allow the sequence to enter any required mode before verifying
+        // (e.g., re-enter SACI mode for CC23xx/CC27xx after finish_flash).
         self.flash_sequence
             .prepare_verify(session)
             .map_err(FlashError::Core)?;
@@ -310,7 +314,7 @@ impl HostSideFlasher {
             }
         }
 
-        /* Exit any special verification mode and leave the device in a clean state. */
+        // Exit any special verification mode and leave the device in a clean state.
         self.flash_sequence
             .finish_flash(session)
             .map_err(FlashError::Core)?;

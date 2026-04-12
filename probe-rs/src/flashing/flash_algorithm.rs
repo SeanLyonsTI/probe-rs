@@ -273,7 +273,7 @@ impl FlashAlgorithm {
     ) -> Result<Self, FlashError> {
         use std::mem::size_of;
 
-        /* Validate that all fields required by a RAM-based flash algorithm are present. */
+        // Validate that all fields required by a RAM-based flash algorithm are present.
         if raw.instructions.is_empty() {
             return Err(FlashError::MissingRamAlgorithmField {
                 name: raw.name.clone(),
@@ -489,10 +489,10 @@ impl FlashAlgorithm {
     ) -> Result<FlashAlgorithm, FlashError> {
         use probe_rs_target::FlashLoaderType;
 
-        /* HostSide algorithms are not assembled into RAM — they have no instructions,
-         * load address, or PC entry points.  Return a minimal stub so callers that
-         * iterate all algorithms (e.g. the validate_builtin test) don't need to
-         * special-case the loader type. */
+        // HostSide algorithms are not assembled into RAM — they have no instructions,
+        // load address, or PC entry points.  Return a minimal stub so callers that
+        // iterate all algorithms (e.g. the validate_builtin test) don't need to
+        // special-case the loader type.
         if algo.flash_loader_type == FlashLoaderType::HostSide {
             return Ok(FlashAlgorithm {
                 name: algo.name.clone(),

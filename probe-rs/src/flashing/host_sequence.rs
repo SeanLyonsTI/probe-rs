@@ -9,8 +9,8 @@
 
 use std::fmt::Debug;
 
-use probe_rs_target::NvmRegion;
 use crate::flashing::FlashLayout;
+use probe_rs_target::NvmRegion;
 
 use crate::Error;
 use crate::session::Session;
@@ -86,12 +86,7 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
     /// Verify that the data at the given address matches `data`.
     ///
     /// Returns `Ok(true)` if verification passed, `Ok(false)` on mismatch.
-    fn verify(
-        &self,
-        session: &mut Session,
-        address: u64,
-        data: &[u8],
-    ) -> Result<bool, Error>;
+    fn verify(&self, session: &mut Session, address: u64, data: &[u8]) -> Result<bool, Error>;
 
     /// Returns whether this device supports per-sector erase.
     ///

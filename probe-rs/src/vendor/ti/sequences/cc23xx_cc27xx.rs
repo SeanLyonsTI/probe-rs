@@ -16,8 +16,8 @@ use crate::architecture::arm::core::cortex_m;
 use crate::architecture::arm::dp::{Abort, Ctrl, DebugPortError, DpAccess, DpAddress, SelectV1};
 use crate::architecture::arm::memory::ArmMemoryInterface;
 use crate::architecture::arm::sequences::{ArmDebugSequence, cortex_m_core_start};
-use crate::flashing::DebugFlashSequence;
 use crate::architecture::arm::{ArmError, FullyQualifiedApAddress};
+use crate::flashing::DebugFlashSequence;
 use probe_rs_target::CoreType;
 
 /// Marker struct indicating initialization sequencing for cc23xx_cc27xx family parts.
@@ -474,26 +474,26 @@ impl ArmDebugSequence for CC23xxCC27xx {
         // Read the device status register
         let mut device_status = DeviceStatusRegister::read(interface)?;
 
-        /* AHB-AP is not accessible when in SACI mode. */
+        // AHB-AP is not accessible when in SACI mode.
         if !device_status.ahb_ap_available() {
             if self.saci_flash_mode.load(Ordering::SeqCst) {
-                /* Flash programming is in progress — stay in SACI mode so the
-                 * ROM flash handler remains active for subsequent SACI commands. */
+                // Flash programming is in progress — stay in SACI mode so the
+                // ROM flash handler remains active for subsequent SACI commands.
                 tracing::info!(
                     "CC23xx/CC27xx: debug_port_start in flash mode, leaving SACI active"
                 );
                 return Ok(());
             }
 
-            /* Normal debug session — exit SACI so the AHB-AP becomes accessible.
-             * debug_port_connect already asserted nRESET so the ROM starts fresh
-             * with isExitAllowed=true, meaning EXIT_SACI_HALT should succeed. */
+            // Normal debug session — exit SACI so the AHB-AP becomes accessible.
+            // debug_port_connect already asserted nRESET so the ROM starts fresh
+            // with isExitAllowed=true, meaning EXIT_SACI_HALT should succeed.
             self.saci_command(interface, saci_cmd::DEBUG_EXIT_SACI_HALT)?;
 
             thread::sleep(Duration::from_millis(30));
             device_status = DeviceStatusRegister::read(interface)?;
 
-            /* Check if the boot ROM is waiting for a debugger to attach. */
+            // Check if the boot ROM is waiting for a debugger to attach.
             match device_status.boot_status() {
                 BOOT_STATUS_BOOT_WAITLOOP_DBGPROBE
                 | BOOT_STATUS_BLDR_WAITLOOP_DBGPROBE
@@ -574,21 +574,21 @@ impl ArmDebugSequence for CC23xxCC27xx {
     ) -> Result<(), ArmError> {
         tracing::info!("CC23xx/CC27xx: Asserting nRESET before SWD connect (OpenOCD-compatible)");
 
-        /* Assert nRESET (drive low). */
+        // Assert nRESET (drive low).
         self.reset_hardware_assert(interface)?;
         thread::sleep(Duration::from_millis(5));
 
-        /* Deassert nRESET (release/drive high): set both pin_output and pin_select
-         * bits for nRESET so the probe drives nRESET high. */
+        // Deassert nRESET (release/drive high): set both pin_output and pin_select
+        // bits for nRESET so the probe drives nRESET high.
         let mut n_reset = crate::architecture::arm::traits::Pins(0);
         n_reset.set_nreset(true);
         let _ = interface.swj_pins(n_reset.0 as u32, n_reset.0 as u32, 0)?;
 
-        /* Give the ROM time to reach the SACI handler before the SWD connect
-         * sequence reads DPIDR (60 ms matches OpenOCD's timing). */
+        // Give the ROM time to reach the SACI handler before the SWD connect
+        // sequence reads DPIDR (60 ms matches OpenOCD's timing).
         thread::sleep(Duration::from_millis(60));
 
-        /* Delegate to the default SWD connect sequence. */
+        // Delegate to the default SWD connect sequence.
         let default = crate::architecture::arm::sequences::DefaultArmSequence::create();
         default.debug_port_connect(interface, dp)
     }
@@ -689,18 +689,18 @@ impl CC23xxCC27xxFlashSequence {
             return Ok(());
         }
 
-        /* Poll until TX buffer is ready for a new command. */
+        // Poll until TX buffer is ready for a new command.
         self.poll_tx_ctrl(interface, timeout)?;
 
-        /* Set CMD_START to mark the beginning of a new command, then write the first word. */
+        // Set CMD_START to mark the beginning of a new command, then write the first word.
         let mut tx_ctrl = TxCtrlRegister(0);
         tx_ctrl.set_cmd_start(true);
         TxCtrlRegister::write(&tx_ctrl, interface)?;
         interface.write_raw_ap_register(&sec_ap, sec_ap_regs::TX_DATA, words[0])?;
 
         if words.len() > 1 {
-            /* Wait for first word to be consumed, then clear CMD_START before
-             * sending continuation words. */
+            // Wait for first word to be consumed, then clear CMD_START before
+            // sending continuation words.
             self.poll_tx_ctrl(interface, timeout)?;
             interface.write_raw_ap_register(&sec_ap, sec_ap_regs::TX_CTRL, 0)?;
 
@@ -710,7 +710,7 @@ impl CC23xxCC27xxFlashSequence {
             }
         }
 
-        /* Final poll to confirm the last word has been consumed. */
+        // Final poll to confirm the last word has been consumed.
         self.poll_tx_ctrl(interface, timeout)?;
 
         Ok(())
@@ -732,10 +732,16 @@ impl CC23xxCC27xxFlashSequence {
     fn check_saci_result(response: u32, context: &str) -> Result<(), ArmError> {
         let result = SaciResult::from(((response >> 16) & 0xFF) as u8);
         if result != SaciResult::Success {
-            tracing::error!("SACI {} failed: {:?} (raw response: 0x{:08X})", context, result, response);
-            return Err(ArmError::Other(
-                format!("SACI {} failed: {:?}", context, result),
-            ));
+            tracing::error!(
+                "SACI {} failed: {:?} (raw response: 0x{:08X})",
+                context,
+                result,
+                response
+            );
+            return Err(ArmError::Other(format!(
+                "SACI {} failed: {:?}",
+                context, result
+            )));
         }
         Ok(())
     }
@@ -772,22 +778,21 @@ impl CC23xxCC27xxFlashSequence {
 
         self.saci_send_words(interface, &words, Duration::from_millis(200))?;
         let response = self.saci_read_response(interface, Duration::from_secs(5))?;
-        Self::check_saci_result(response, &format!("FLASH_PROG_MAIN_SECTOR at 0x{address:08X}"))?;
+        Self::check_saci_result(
+            response,
+            &format!("FLASH_PROG_MAIN_SECTOR at 0x{address:08X}"),
+        )?;
         Ok(())
     }
 
     /// Program the CCFG sector using FLASH_PROG_CCFG_SECTOR (0x0C).
     ///
     /// Pads data to exactly 512 words (2048 bytes) with 0xFF.  Sets skip_user_rec=1.
-    fn program_ccfg(
-        &self,
-        interface: &mut dyn DapAccess,
-        data: &[u8],
-    ) -> Result<(), ArmError> {
-        /* skip_user_rec = bit 0 of cmd_specific */
+    fn program_ccfg(&self, interface: &mut dyn DapAccess, data: &[u8]) -> Result<(), ArmError> {
+        // skip_user_rec = bit 0 of cmd_specific
         let header = Self::make_header(saci_cmd::FLASH_PROG_CCFG_SECTOR, 0x0001);
 
-        /* Pad to exactly 2048 bytes / 512 words. */
+        // Pad to exactly 2048 bytes / 512 words.
         let mut padded = vec![0xFFu8; 2048];
         let copy_len = data.len().min(2048);
         padded[..copy_len].copy_from_slice(&data[..copy_len]);
@@ -804,11 +809,7 @@ impl CC23xxCC27xxFlashSequence {
     /// Program the SCFG sector using FLASH_PROG_SCFG_SECTOR (0x1A).
     ///
     /// byte_count is the number of bytes to program (encoded in cmd_specific).
-    fn program_scfg(
-        &self,
-        interface: &mut dyn DapAccess,
-        data: &[u8],
-    ) -> Result<(), ArmError> {
+    fn program_scfg(&self, interface: &mut dyn DapAccess, data: &[u8]) -> Result<(), ArmError> {
         let byte_count = data.len() as u32;
         let header = Self::make_header(saci_cmd::FLASH_PROG_SCFG_SECTOR, byte_count);
 
@@ -836,15 +837,15 @@ impl CC23xxCC27xxFlashSequence {
     fn reset_into_saci_mode(&self, interface: &mut dyn ArmDebugInterface) -> Result<(), ArmError> {
         tracing::info!("CC23xx/CC27xx: Re-initializing to enter SACI mode for flash programming");
 
-        /* `reinitialize()` calls `debug_port_connect` which now always asserts
-         * nRESET, causing the ROM to re-enter SACI mode.  `debug_port_start` will
-         * see `saci_flash_mode == true` (set by new_with_flag) and skip EXIT_SACI. */
+        // `reinitialize()` calls `debug_port_connect` which now always asserts
+        // nRESET, causing the ROM to re-enter SACI mode.  `debug_port_start` will
+        // see `saci_flash_mode == true` (set by new_with_flag) and skip EXIT_SACI.
         interface.reinitialize()?;
 
-        /* Give the ROM time to reach the SACI handler after reinitialise. */
+        // Give the ROM time to reach the SACI handler after reinitialise.
         thread::sleep(Duration::from_millis(100));
 
-        /* Confirm SACI mode by checking ahb_ap_available == false. */
+        // Confirm SACI mode by checking ahb_ap_available == false.
         let start = Instant::now();
         loop {
             if matches!(DeviceStatusRegister::read(interface), Ok(s) if !s.ahb_ap_available()) {
@@ -865,7 +866,7 @@ impl CC23xxCC27xxFlashSequence {
 
 impl Drop for CC23xxCC27xxFlashSequence {
     fn drop(&mut self) {
-        /* Reset the flash mode flag so subsequent debug sessions exit SACI normally. */
+        // Reset the flash mode flag so subsequent debug sessions exit SACI normally.
         self.saci_flash_mode.store(false, Ordering::SeqCst);
     }
 }
@@ -886,14 +887,14 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
     fn erase_all(&self, session: &mut Session) -> Result<(), crate::Error> {
         let interface = session.get_arm_interface()?;
 
-        /* debug_port_start exited SACI mode to access the AHB-AP.  A hardware
-         * reset via nRESET is required to re-enter SACI mode before flash
-         * commands can be accepted. */
+        // debug_port_start exited SACI mode to access the AHB-AP.  A hardware
+        // reset via nRESET is required to re-enter SACI mode before flash
+        // commands can be accepted.
         self.reset_into_saci_mode(interface)?;
 
         tracing::info!("CC23xx/CC27xx: Chip erase via SACI FLASH_ERASE_CHIP (0x09)");
 
-        /* FLASH_ERASE_CHIP (0x09): [header, FLASH_KEY] */
+        // FLASH_ERASE_CHIP (0x09): [header, FLASH_KEY]
         let header = Self::make_header(saci_cmd::FLASH_ERASE_CHIP, 0);
         let words = [header, saci_cmd::FLASH_KEY];
         self.saci_send_words(interface, &words, Duration::from_millis(200))?;
@@ -944,11 +945,11 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
         let interface = session.get_arm_interface()?;
 
         if address >= SCFG_START {
-            /* FLASH_VERIFY_SCFG_SECTOR (0x1B): [header(check_exp_crc=1), expCrc32]
-             *
-             * The ROM verifies CRC over only the first 0xE4 (228) bytes of SCFG,
-             * matching the range covered by Scfg::update_crcs() and OpenOCD's
-             * SCFG_CONTENT_SIZE constant.  The trailing key-ring slots are excluded. */
+            // FLASH_VERIFY_SCFG_SECTOR (0x1B): [header(check_exp_crc=1), expCrc32]
+            //
+            // The ROM verifies CRC over only the first 0xE4 (228) bytes of SCFG,
+            // matching the range covered by Scfg::update_crcs() and OpenOCD's
+            // SCFG_CONTENT_SIZE constant.  The trailing key-ring slots are excluded.
             const SCFG_CRC_BYTE_COUNT: usize = 0xE4;
             let crc_data = &data[..data.len().min(SCFG_CRC_BYTE_COUNT)];
             let expected_crc = crc32_iso_hdlc(crc_data);
@@ -960,12 +961,15 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
             match result {
                 SaciResult::Success => Ok(true),
                 SaciResult::Crc32Mismatch => Ok(false),
-                _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_SCFG_SECTOR failed: {result:?}")).into()),
+                _ => Err(ArmError::Other(format!(
+                    "SACI FLASH_VERIFY_SCFG_SECTOR failed: {result:?}"
+                ))
+                .into()),
             }
         } else if address >= CCFG_START {
-            /* FLASH_VERIFY_CCFG_SECTOR (0x11): simplest form — check_exp_crcs=0,
-             * skip_user_rec=1 — lets the ROM verify the CRCs embedded in the CCFG
-             * rather than requiring the host to supply external CRCs. */
+            // FLASH_VERIFY_CCFG_SECTOR (0x11): simplest form — check_exp_crcs=0,
+            // skip_user_rec=1 — lets the ROM verify the CRCs embedded in the CCFG
+            // rather than requiring the host to supply external CRCs.
             let header = Self::make_header(saci_cmd::FLASH_VERIFY_CCFG_SECTOR, 0x0002);
             let words = [header, 0u32, 0u32, 0u32, 0u32];
             self.saci_send_words(interface, &words, Duration::from_millis(100))?;
@@ -974,10 +978,13 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
             match result {
                 SaciResult::Success => Ok(true),
                 SaciResult::Crc32Mismatch | SaciResult::BlankCheckFailed => Ok(false),
-                _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_CCFG_SECTOR failed: {result:?}")).into()),
+                _ => Err(ArmError::Other(format!(
+                    "SACI FLASH_VERIFY_CCFG_SECTOR failed: {result:?}"
+                ))
+                .into()),
             }
         } else {
-            /* FLASH_VERIFY_MAIN_SECTORS (0x10): [header, firstSectorAddr, byteCount, expCrc32] */
+            // FLASH_VERIFY_MAIN_SECTORS (0x10): [header, firstSectorAddr, byteCount, expCrc32]
             let expected_crc = crc32_iso_hdlc(data);
             let header = Self::make_header(saci_cmd::FLASH_VERIFY_MAIN_SECTORS, 0);
             let words = [header, address as u32, data.len() as u32, expected_crc];
@@ -987,7 +994,10 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
             match result {
                 SaciResult::Success => Ok(true),
                 SaciResult::Crc32Mismatch => Ok(false),
-                _ => Err(ArmError::Other(format!("SACI FLASH_VERIFY_MAIN_SECTORS failed: {result:?}")).into()),
+                _ => Err(ArmError::Other(format!(
+                    "SACI FLASH_VERIFY_MAIN_SECTORS failed: {result:?}"
+                ))
+                .into()),
             }
         }
     }
@@ -999,36 +1009,33 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
     fn prepare_verify(&self, session: &mut Session) -> Result<(), crate::Error> {
         let interface = session.get_arm_interface()?;
 
-        /* When verify runs as a separate pass after finish_flash() exited SACI,
-         * the device is in normal debug mode.  We need to re-enter SACI to send
-         * FLASH_VERIFY_* commands.  If already in SACI mode (inline verify during
-         * program()), this is a no-op. */
+        // When verify runs as a separate pass after finish_flash() exited SACI,
+        // the device is in normal debug mode.  We need to re-enter SACI to send
+        // FLASH_VERIFY_* commands.  If already in SACI mode (inline verify during
+        // program()), this is a no-op.
         if matches!(DeviceStatusRegister::read(interface), Ok(s) if s.ahb_ap_available()) {
-            tracing::info!(
-                "CC23xx/CC27xx: Prepare verify — device not in SACI, re-entering"
-            );
+            tracing::info!("CC23xx/CC27xx: Prepare verify — device not in SACI, re-entering");
             self.reset_into_saci_mode(interface)?;
         }
         Ok(())
     }
 
     fn finish_flash(&self, session: &mut Session) -> Result<(), crate::Error> {
-        /* The session is reused between the flash operation and post-flash debug
-         * access, so the device must be out of SACI mode before we return.
-         *
-         * Sequence (matches OpenOCD `cc27xx reset_halt` after programming):
-         * 1. Clear saci_flash_mode so the next debug_port_start exits SACI.
-         * 2. Call reinitialize() which triggers debug_port_connect (nRESET → SACI)
-         *    then debug_port_start (EXIT_SACI_HALT → device boots, AHB-AP available).
-         */
+        // The session is reused between the flash operation and post-flash debug
+        // access, so the device must be out of SACI mode before we return.
+        //
+        // Sequence (matches OpenOCD `cc27xx reset_halt` after programming):
+        // 1. Clear saci_flash_mode so the next debug_port_start exits SACI.
+        // 2. Call reinitialize() which triggers debug_port_connect (nRESET → SACI)
+        //    then debug_port_start (EXIT_SACI_HALT → device boots, AHB-AP available).
         tracing::info!("CC23xx/CC27xx: Flash complete, exiting SACI for normal debug access");
 
-        /* Step 1: Clear the flag BEFORE reinitialize so debug_port_start sends
-         * EXIT_SACI_HALT instead of staying in SACI mode. */
+        // Step 1: Clear the flag BEFORE reinitialize so debug_port_start sends
+        // EXIT_SACI_HALT instead of staying in SACI mode.
         self.saci_flash_mode.store(false, Ordering::SeqCst);
 
-        /* Step 2: Reinitialize → debug_port_connect (nRESET) → debug_port_start
-         * (EXIT_SACI_HALT) → device exits SACI and enters boot wait loop. */
+        // Step 2: Reinitialize → debug_port_connect (nRESET) → debug_port_start
+        // (EXIT_SACI_HALT) → device exits SACI and enters boot wait loop.
         let interface = session.get_arm_interface()?;
         interface.reinitialize()?;
 

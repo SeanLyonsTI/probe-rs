@@ -1039,7 +1039,11 @@ impl FlashLoader {
             )?;
 
             // We don't usually have more than a handful of regions, linear search should be fine.
-            tracing::debug!("     -- using algorithm: {} (loader_type: {:?})", algo.name, algo.flash_loader_type);
+            tracing::debug!(
+                "     -- using algorithm: {} (loader_type: {:?})",
+                algo.name,
+                algo.flash_loader_type
+            );
 
             // Check if this is a host-side flash algorithm
             if algo.flash_loader_type == FlashLoaderType::HostSide {
@@ -1055,9 +1059,9 @@ impl FlashLoader {
                         f.add_region(region, &self.builder, restore_unwritten_bytes)?;
                     }
                 } else {
-                    /* Get the host-side flash sequence via the architecture-agnostic
-                     * DebugSequence::debug_flash_sequence() dispatcher.  This works for
-                     * ARM, RISC-V, and Xtensa targets uniformly. */
+                    // Get the host-side flash sequence via the architecture-agnostic
+                    // DebugSequence::debug_flash_sequence() dispatcher.  This works for
+                    // ARM, RISC-V, and Xtensa targets uniformly.
                     let flash_sequence = session
                         .target()
                         .debug_sequence

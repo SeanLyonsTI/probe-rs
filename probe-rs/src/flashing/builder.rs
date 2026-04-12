@@ -382,7 +382,8 @@ impl FlashBuilder {
                 continue;
             }
 
-            let page = Self::page_info_from_properties(flash_properties, info.base_address).unwrap();
+            let page =
+                Self::page_info_from_properties(flash_properties, info.base_address).unwrap();
             let page_range = page.address_range();
             let sector_has_data = self.has_data_in_range(&range);
             let page_has_data = self.has_data_in_range(&page_range);
@@ -407,7 +408,8 @@ impl FlashBuilder {
                 continue;
             }
 
-            let sector = Self::sector_info_from_properties(flash_properties, info.base_address).unwrap();
+            let sector =
+                Self::sector_info_from_properties(flash_properties, info.base_address).unwrap();
             let sector_range = sector.address_range();
             let sector_has_data = self.has_data_in_range(&sector_range);
             let page_has_data = self.has_data_in_range(&range);
@@ -518,7 +520,10 @@ impl FlashBuilder {
 
         let offset_address = address - props.address_range.start;
 
-        let containing_sector = props.sectors.iter().rfind(|s| s.address <= offset_address)?;
+        let containing_sector = props
+            .sectors
+            .iter()
+            .rfind(|s| s.address <= offset_address)?;
 
         let sector_index = (offset_address - containing_sector.address) / containing_sector.size;
 
