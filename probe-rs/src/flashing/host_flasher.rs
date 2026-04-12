@@ -1,8 +1,7 @@
 //! Host-side flash programming implementation.
 //!
 //! This module provides flash programming via the host PC using debug interface
-//! commands (e.g., SACI for TI CC23xx/CC27xx), rather than loading a flash
-//! algorithm into target RAM.
+//! commands, rather than loading a flash algorithm into target RAM.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,10 +16,10 @@ use crate::session::Session;
 
 /// Build a region-specific `FlashProperties` from an algorithm's full properties.
 ///
-/// The algorithm's `flash_properties` covers the entire address space of all flash regions
-/// (e.g., MAIN + CCFG + SCFG).  When building a layout for a single `NvmRegion` we need
+/// The algorithm's `flash_properties` covers the entire address space of all flash regions which might be noncontiguous.
+/// When building a layout for a single `NvmRegion` we need
 /// properties scoped to just that region so the sector iterator doesn't traverse phantom
-/// sectors across the large gap between MAIN flash and the peripheral-mapped CCFG/SCFG.
+/// sectors across the large gap between MAIN flash and other flash regions
 fn region_flash_props(
     algo_props: &FlashProperties,
     region_range: &std::ops::Range<u64>,
