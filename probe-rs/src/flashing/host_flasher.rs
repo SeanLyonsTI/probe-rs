@@ -127,14 +127,22 @@ impl HostSideFlasher {
     }
 
     /// Host-side flashers don't support double buffering.
+    ///
+    /// Double buffering is a RAM-algorithm optimisation (two page buffers in target RAM so
+    /// programming and data transfer can overlap).  It has no meaning for host-side flash
+    /// where there is no RAM algorithm.
     pub(super) fn double_buffering_supported(&self) -> bool {
         false
     }
 
-    /// Check if chip erase is supported.
+    /// Returns whether chip erase is supported, as reported by the flash sequence.
+    ///
+    /// Delegates to [`DebugFlashSequence::supports_chip_erase`] so each device can
+    /// express its own capability.  Devices that handle erase internally (e.g. a
+    /// toolbox that performs erase as part of factory programming) should return `false`
+    /// to prevent the loader issuing a redundant separate erase step.
     pub(super) fn is_chip_erase_supported(&self, _session: &Session) -> bool {
-        // Host-side flash sequences always support erase_all
-        true
+        self.flash_sequence.supports_chip_erase()
     }
 
     /// Run chip erase via the debug flash sequence.

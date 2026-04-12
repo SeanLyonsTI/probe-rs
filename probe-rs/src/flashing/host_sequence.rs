@@ -88,6 +88,18 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
     /// Returns `Ok(true)` if verification passed, `Ok(false)` on mismatch.
     fn verify(&self, session: &mut Session, address: u64, data: &[u8]) -> Result<bool, Error>;
 
+    /// Returns whether this device supports erasing the entire chip in one operation.
+    ///
+    /// When `true` (the default), the flash loader may use [`erase_all`](Self::erase_all)
+    /// as its primary erase strategy.  Devices that manage erase internally (e.g. a
+    /// toolbox-based device that performs erase as part of its own programming sequence)
+    /// should return `false` so the loader does not issue a redundant separate erase.
+    ///
+    /// Defaults to `true`.
+    fn supports_chip_erase(&self) -> bool {
+        true
+    }
+
     /// Returns whether this device supports per-sector erase.
     ///
     /// When `false`, [`HostSideFlasher`](super::HostSideFlasher) performs a single chip erase
