@@ -884,14 +884,24 @@ const CCFG_START: u64 = 0x4E02_0000;
 const SCFG_START: u64 = 0x4E04_0000;
 
 impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
+    fn prepare_flash(&self, session: &mut Session) -> Result<(), crate::Error> {
+        let interface = session.get_arm_interface()?;
+
+        // Ensure the device is in SACI mode before any flash operation.  This
+        // handles both the initial call (device was in normal debug mode after
+        // debug_port_start exited SACI) and repeated calls after finish_flash()
+        // re-enters normal debug mode (e.g. standalone verify pass).
+        if matches!(DeviceStatusRegister::read(interface), Ok(s) if s.ahb_ap_available()) {
+            tracing::info!("CC23xx/CC27xx: prepare_flash — device not in SACI, re-entering");
+            self.reset_into_saci_mode(interface)?;
+        }
+        Ok(())
+    }
+
     fn erase_all(&self, session: &mut Session) -> Result<(), crate::Error> {
         let interface = session.get_arm_interface()?;
 
-        // debug_port_start exited SACI mode to access the AHB-AP.  A hardware
-        // reset via nRESET is required to re-enter SACI mode before flash
-        // commands can be accepted.
-        self.reset_into_saci_mode(interface)?;
-
+        // prepare_flash() has already ensured we are in SACI mode.
         tracing::info!("CC23xx/CC27xx: Chip erase via SACI FLASH_ERASE_CHIP (0x09)");
 
         // FLASH_ERASE_CHIP (0x09): [header, FLASH_KEY]
@@ -1004,20 +1014,6 @@ impl DebugFlashSequence for CC23xxCC27xxFlashSequence {
 
     fn supports_sector_erase(&self) -> bool {
         false
-    }
-
-    fn prepare_verify(&self, session: &mut Session) -> Result<(), crate::Error> {
-        let interface = session.get_arm_interface()?;
-
-        // When verify runs as a separate pass after finish_flash() exited SACI,
-        // the device is in normal debug mode.  We need to re-enter SACI to send
-        // FLASH_VERIFY_* commands.  If already in SACI mode (inline verify during
-        // program()), this is a no-op.
-        if matches!(DeviceStatusRegister::read(interface), Ok(s) if s.ahb_ap_available()) {
-            tracing::info!("CC23xx/CC27xx: Prepare verify — device not in SACI, re-entering");
-            self.reset_into_saci_mode(interface)?;
-        }
-        Ok(())
     }
 
     fn finish_flash(&self, session: &mut Session) -> Result<(), crate::Error> {

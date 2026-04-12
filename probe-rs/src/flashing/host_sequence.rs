@@ -25,16 +25,17 @@ use crate::session::Session;
 /// ## Lifecycle
 ///
 /// ```text
-/// prepare_flash()          ← optional setup (e.g. release probe for external toolbox)
+/// prepare_flash()    ← enter required mode (e.g. SACI for CC27xx, release probe for CC35xx)
 ///   erase_all() / erase_sector()
-///   program() ...          ← per-page, OR
-///   program_image()        ← whole-image (overrides per-page loop when Some is returned)
+///   program() ...    ← per-page, OR
+///   program_image()  ← whole-image (overrides per-page loop when Some is returned)
 ///   verify() ...
-///   finish_flash()         ← mandatory cleanup (exit special mode, re-acquire probe, etc.)
-/// [standalone verify pass:]
-///   prepare_verify()
+/// finish_flash()     ← exit mode / re-acquire probe; called after both full flash and verify
+///
+/// [standalone verify pass — same bookends:]
+/// prepare_flash()
 ///   verify() ...
-///   finish_flash()
+/// finish_flash()
 /// ```
 pub trait DebugFlashSequence: Send + Sync + Debug {
     /// Called once before any erase/program/verify operations begin.
@@ -118,18 +119,10 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
     /// again.  For external-toolbox devices this re-acquires the probe connection that was
     /// released in [`prepare_flash`](Self::prepare_flash).
     ///
+    /// Called at the end of both the full flash path and the standalone verify path.
+    ///
     /// The default implementation does nothing.
     fn finish_flash(&self, _session: &mut Session) -> Result<(), Error> {
-        Ok(())
-    }
-
-    /// Called before a standalone verify pass (after `finish_flash` has already run).
-    ///
-    /// For devices that require a special mode for verification (e.g. SACI on CC23xx/CC27xx),
-    /// this re-enters that mode before the verify commands are sent.
-    ///
-    /// The default implementation does nothing.
-    fn prepare_verify(&self, _session: &mut Session) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -176,7 +169,7 @@ mod tests {
         // program_image defaults to None — the method exists with a default implementation.
         // We verify this by confirming NoOpSequence compiles without overriding it.
 
-        // prepare_flash, finish_flash, prepare_verify, erase_sector all have defaults
+        // prepare_flash, finish_flash, erase_sector all have defaults
         // (compilation proves the defaults exist and have the expected signatures)
     }
 

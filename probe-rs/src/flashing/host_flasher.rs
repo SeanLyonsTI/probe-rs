@@ -297,10 +297,11 @@ impl HostSideFlasher {
     ) -> Result<bool, FlashError> {
         tracing::debug!("Host-side: Starting verify procedure");
 
-        // Allow the sequence to enter any required mode before verifying
-        // (e.g., re-enter SACI mode for CC23xx/CC27xx after finish_flash).
+        // prepare_flash() is the single entry point for entering the required
+        // mode — used here for the standalone verify pass the same way it is
+        // used before the full erase+program path.
         self.flash_sequence
-            .prepare_verify(session)
+            .prepare_flash(session)
             .map_err(FlashError::Core)?;
 
         for region in &self.regions {
