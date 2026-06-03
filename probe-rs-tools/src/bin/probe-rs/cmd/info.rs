@@ -90,6 +90,7 @@ impl Cmd {
                     connect_under_reset: self.common.connect_under_reset,
                     dry_run: self.common.dry_run,
                     scan_chain: self.scan_chain.clone(),
+                    chip: self.common.chip.clone(),
                 };
 
                 let result = client

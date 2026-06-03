@@ -2,6 +2,8 @@
 //!
 //! The information is passed as a stream of messages to the provided emitter.
 
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use postcard_rpc::header::{VarHeader, VarSeq};
 use postcard_schema::{Schema, schema};
@@ -17,12 +19,13 @@ use probe_rs::{
                 ArmMemoryInterface, Component, ComponentId, CoresightComponent, PeripheralType,
                 romtable::{PeripheralID, RomTable},
             },
-            sequences::DefaultArmSequence,
+            sequences::{ArmDebugSequence, DefaultArmSequence},
         },
         xtensa::communication_interface::{
             XtensaCommunicationInterface, XtensaDebugInterfaceState,
         },
     },
+    config::DebugSequence,
     probe::{Probe, WireProtocol as ProbeRsWireProtocol},
 };
 use probe_rs_target::ScanChainElement;
@@ -68,6 +71,13 @@ pub struct TargetInfoRequest {
     /// directly. For example, `[5]` specifies a single-TAP chain with IR length 5.
     #[serde(default)]
     pub scan_chain: Vec<u8>,
+    /// Optional chip name used to select a chip-specific debug sequence.
+    ///
+    /// When provided, the chip's vendor sequence (e.g. ICEPick for CC13xx/CC26xx) is used
+    /// instead of the generic DefaultArmSequence, which enables correct JTAG bring-up for
+    /// devices that require custom debug port setup.
+    #[serde(default)]
+    pub chip: Option<String>,
 }
 
 impl From<&TargetInfoRequest> for ProbeOptions {
@@ -96,6 +106,20 @@ pub async fn target_info(
     request: TargetInfoRequest,
 ) -> NoResponse {
     let mut registry = ctx.registry().await;
+
+    let arm_sequence: Arc<dyn ArmDebugSequence> = request
+        .chip
+        .as_deref()
+        .and_then(|name| registry.get_target_by_name(name).ok())
+        .and_then(|target| {
+            if let DebugSequence::Arm(seq) = target.debug_sequence {
+                Some(seq)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(DefaultArmSequence::create);
+
     let probe_options = ProbeOptions::from(&request).load(&mut registry)?;
 
     let probe = probe_options.attach_probe(&ctx.lister())?;
@@ -107,6 +131,7 @@ pub async fn target_info(
         request.protocol,
         probe_options.connect_under_reset(),
         request.target_sel,
+        arm_sequence,
     )
     .await
     {
@@ -319,6 +344,7 @@ async fn try_show_info(
     protocol: WireProtocol,
     connect_under_reset: bool,
     target_sel: Option<u32>,
+    arm_sequence: Arc<dyn ArmDebugSequence>,
 ) -> anyhow::Result<()> {
     probe.select_protocol(ProbeRsWireProtocol::from(protocol))?;
 
@@ -354,7 +380,7 @@ async fn try_show_info(
         };
 
         for address in dp_addr {
-            match try_show_arm_dp_info(ctx, probe, address).await {
+            match try_show_arm_dp_info(ctx, probe, address, arm_sequence.clone()).await {
                 (probe_moved, Ok(dp_version)) => {
                     probe = probe_moved;
                     if dp_version < dp::DebugPortVersion::DPv2 && target_sel.is_none() {
@@ -495,11 +521,12 @@ async fn try_show_arm_dp_info(
     ctx: &mut RpcContext,
     probe: Probe,
     dp_address: dp::DpAddress,
+    arm_sequence: Arc<dyn ArmDebugSequence>,
 ) -> (Probe, anyhow::Result<dp::DebugPortVersion>) {
     tracing::debug!("Trying to show ARM chip information");
 
     let mut interface = match probe
-        .try_into_arm_debug_interface(DefaultArmSequence::create())
+        .try_into_arm_debug_interface(arm_sequence)
         .map_err(|(iface, e)| (iface, anyhow!(e)))
     {
         Ok(interface) => interface,
